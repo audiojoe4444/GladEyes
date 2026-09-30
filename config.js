@@ -29,15 +29,18 @@ window.PLEX_CONFIG = {
     strategy: "auto",
     hlsEngine: "auto",           // "auto" = the browser's own HLS player first. "hlsjs" = try the hls.js library first
     container: "mp4",            // container for the progressive MP4 fallback
-    videoResolution: "480x270",  // small, but the display is only 600 pixels wide and it looks good; raise it if you want more detail
-    maxVideoBitrate: 600,        // kbps. This is the number that matters most for smooth playback: lower = fewer stalls
+    maxVideoBitrate: 600,        // kbps the very first film starts at (600 = 480x270). The app then adjusts by itself and remembers
     forceTranscode: true,        // true = server always re-encodes to H.264 + AAC stereo (never direct-streams the video)
     seekStepSeconds: 15,
     controlsHideMs: 6000,        // playback controls auto-hide after this long while playing
     startTimeoutSeconds: 45,     // give up on one method (and try the next) if no picture by then
-    relayResolution: "426x240",  // when connected through Plex's relay (slow) start at this size...
-    relayBitrate: 400,           // ...and this bitrate (kbps)
+    relayBitrate: 400,           // where a first-ever film starts when connected through Plex's relay (slow)
     autoLowerQuality: true,      // if playback keeps stalling, step down to a lighter stream automatically
+    autoRaiseQuality: true,      // after a good stretch without stalls, try one step up (and go back at once if that stalls)
+    autoRaiseUpToKbps: 1200,     // ...but never above this (1200 = 640x360, plenty for the glasses' 600-pixel display)
+    raiseAfterSeconds: 150,      // how long playback must be smooth before trying a step up
+    raiseBufferSeconds: 4,       // ...and how many seconds must be stored up ahead at that moment
+    rememberQuality: true,       // remember what worked for home / remote / relay, so the next film starts there
     rebufferSeconds: 10,         // after a stall, wait until this many seconds are stored up before resuming
     rebufferMaxSeconds: 25,      // ...but never wait longer than this
     hlsJsUrl: ""                 // optional: your own hls.js URL. Empty = js/vendor/hls.min.js, then a public CDN
