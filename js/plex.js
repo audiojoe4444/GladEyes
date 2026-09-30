@@ -90,11 +90,15 @@
       return { ok: !!(this.token && this.server), missingToken: !this.token, missingServer: !this.server };
     },
 
+    /** Tiny key/value memory on the device (last letter chosen per library, etc.). */
+    remember(k, v) { store.set('plex.pref.' + k, String(v)); },
+    recall(k) { return store.get('plex.pref.' + k); },
+
     identity() {
       const chrome = (navigator.userAgent.match(/Chrome\/(\d+)/) || [])[1] || '120';
       return {
         'X-Plex-Product': 'Plex Glasses',
-        'X-Plex-Version': '3.0.0',
+        'X-Plex-Version': '5.0.0',
         'X-Plex-Client-Identifier': this.clientId,
         // "Chrome" makes the server apply its built-in Chrome client profile (H.264/AAC etc.).
         'X-Plex-Platform': 'Chrome',

@@ -343,17 +343,31 @@ body.mode-player .topbar {
 .play-badge .ico { display: grid; place-items: center; transform: translateX(.07em); }  /* optical centring of the triangle */
 .btn-play:focus { outline: 3px solid #fff; outline-offset: 3px; box-shadow: 0 0 0 7px var(--accent-soft); }
 
-/* ---------- player: visible "Controls" pill + stats line ---------- */
+/* ---------- player: quiet "Controls" pill + stats line ---------- */
+/* Always present and focusable (the glasses need something visible to select), but faint: it shows its label for a
+   few seconds, then shrinks to three dots. */
 .hint {
-  position: absolute; inset-inline: 0; inset-block-end: 1.2rem;
+  position: absolute; inset-inline: 0; inset-block-end: 1rem;
   margin-inline: auto; inline-size: max-content;
-  padding: .55rem 1.3rem;
-  border: 1px solid rgba(255, 255, 255, .45);
+  padding: .35rem 1rem;
+  border: 1px solid rgba(255, 255, 255, .28);
   border-radius: 999px;
-  background: rgba(24, 24, 24, .72);
-  color: #e8e8e8;
-  font-size: 1.05rem; font-weight: 600;
+  background: rgba(0, 0, 0, .35);
+  color: rgba(255, 255, 255, .7);
+  font-size: .9rem; font-weight: 500;
+  opacity: .85;
   cursor: pointer;
+  transition: opacity .5s, padding .3s;
 }
-.hint:focus { outline: 3px solid var(--accent); outline-offset: 3px; background: var(--accent); color: var(--accent-ink); }
+.hint .hint-dots { display: none; letter-spacing: .3em; font-weight: 700; line-height: 1; }
+.hint.quiet { opacity: .5; padding: .2rem .9rem; }
+.hint.quiet .hint-text { display: none; }
+.hint.quiet .hint-dots { display: inline; }
+.hint:focus { outline: 2px solid rgba(255, 255, 255, .55); outline-offset: 2px; color: #fff; background: rgba(0, 0, 0, .5); }
 .pstat { margin: -.5rem 0 .7rem; font-size: .85rem; color: var(--muted); opacity: .85; font-variant-numeric: tabular-nums; }
+
+/* ---------- small quiet button + diagnostics ---------- */
+.btn-quiet { margin-top: .6rem; padding: .45rem 1.1rem; font-size: 1rem; font-weight: 600; color: var(--muted); border-radius: 999px; }
+.diag-h { margin: .9rem 0 .3rem; font-size: 1rem; color: var(--accent); }
+.diag-pre { margin: 0; padding: .7rem .8rem; border: 1px solid var(--line); border-radius: var(--r-md); background: var(--surface); font: .8rem/1.35 ui-monospace, Menlo, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+.diag .btn { margin-top: 1rem; }

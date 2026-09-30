@@ -1,4 +1,4 @@
-# Plex for Meta Ray-Ban Display (v4)
+# Plex for Meta Ray-Ban Display (v5)
 
 A Plex client web app for the Meta Ray-Ban Display glasses. Libraries, list views, movie splash
 screens, season/episode browsing, and a fullscreen player. The Plex server does the
@@ -23,7 +23,8 @@ which ones were left out.
   list. Move **Up** from the first row to reach the strip, **Right/Left** to pick a letter, **Select** to
   show those titles. Each letter shows 100 titles at a time; choose **Show more** at the end for the next 100.
   Going Back from a title returns you to the same letter and row.
-- In the player, a small **Controls** pill sits at the bottom of the picture. **Select** opens: **-15s / Play-Pause /
+- In the player, a small **Controls** pill sits at the bottom of the picture. It shows its label for a few seconds and
+  then shrinks to three faint dots (it has to stay on screen, because the glasses need something visible to select). **Select** opens: **-15s / Play-Pause /
   +15s / Exit**. (If nothing has focus, any Select or arrow press opens them too.) Exit goes back to the movie's
   splash screen (or the episode list for TV). Under the progress bar a stats line shows the playback method,
   quality, seconds buffered and how many times it has stalled.
@@ -159,6 +160,21 @@ Watch the stats line under the progress bar (open the controls). A few things it
   on hardware transcoding (needs Plex Pass) if the server has a supported graphics chip.
 - **Try letting Plex copy the video** (`forceTranscode: false`). If your files are already H.264 this uses almost no
   server power, but the video is sent at its original bitrate, which may be too heavy for the glasses' connection.
+
+## Diagnostics
+
+At the bottom of the Libraries screen is a small **Diagnostics** button. It shows the app and browser versions, whether
+the browser can play HLS natively, and a log of what the app did. The log is kept on the glasses, so after a problem
+(even a freeze that needed a Restart) you can open Diagnostics and read **Last session** to see what happened just
+before. During playback it records a line every 10 seconds (position, buffer, stalls), so the last line shows when
+things stopped. **Clear log** empties it.
+
+## Back and Exit
+
+Back and Exit go up one screen using the browser's history, so the glasses' own Back gesture and the on-screen buttons
+agree. Each screen also remembers where it came from, so if the browser's history ever misbehaves (for example the
+host refuses to add an entry, or ignores `history.back()`), the Back button and Exit still work. The video is stopped
+after the screen has changed, so a player that is slow or throws an error while stopping can't trap you on the player.
 
 ## Where playback starts
 

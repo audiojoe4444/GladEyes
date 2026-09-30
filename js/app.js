@@ -14,7 +14,7 @@
 (function () {
   'use strict';
 
-  const VERSION = '4';
+  const VERSION = '5';
   const cfg = window.PLEX_CONFIG || {};
   const pb = Object.assign({
     strategy: 'auto', hlsEngine: 'auto', container: 'mp4', videoResolution: '480x270', maxVideoBitrate: 600,
@@ -73,6 +73,34 @@
   const rowKey = (r) => String(r.s || r.t || '').trim();
   const rowCmp = (a, b) => collator.compare(rowKey(a), rowKey(b));
 
+  // ---------- diagnostics log (kept on the device, so a problem can be looked at after a restart) ----------
+  const Log = (function () {
+    const KEY = 'plex.log';
+    const KEPT = 'plex.log.kept';
+    const t0 = Date.now();
+    let buf = [];
+    let dirty = false;
+    const read = (k) => { try { return JSON.parse(window.localStorage.getItem(k) || '[]'); } catch (e) { return []; } };
+    const write = (k, v) => { try { window.localStorage.setItem(k, JSON.stringify(v)); } catch (e) { /* ignore */ } };
+    // The session before this one. If it was too short to be interesting, keep showing the last meaningful one.
+    const before = read(KEY);
+    let last = before.length >= 6 ? before : read(KEPT);
+    if (before.length >= 6) write(KEPT, before);
+    function add(msg) {
+      buf.push(((Date.now() - t0) / 1000).toFixed(1) + 's ' + String(msg).slice(0, 100));
+      if (buf.length > 80) buf.shift();
+      dirty = true;
+    }
+    function flush() { if (dirty) { dirty = false; write(KEY, buf); } }
+    setInterval(flush, 1500);
+    window.addEventListener('pagehide', flush);
+    document.addEventListener('visibilitychange', flush);
+    window.addEventListener('error', (e) => add('ERROR ' + (e.message || '?') + (e.lineno ? ' @' + e.lineno : '')));
+    window.addEventListener('unhandledrejection', (e) => add('REJECTED ' + ((e.reason && e.reason.message) || e.reason)));
+    function clear() { buf = []; last = []; dirty = false; write(KEY, []); write(KEPT, []); }
+    return { add, flush, clear, last: () => last, now: () => buf.slice() };
+  })();
+
   // ---------- elements ----------
   const screenEl = $('#screen');
   const topbar = $('#topbar');
@@ -100,7 +128,7 @@
   bFwd.textContent = '+' + STEP + 's';
 
   // ---------- state ----------
-  const ROOT = { screen: 'libraries', d: 0 };
+  const ROOT = { screen: 'libraries', d: 0, nid: 'root' };
   let current = null;
   let renderSeq = 0;
   let creds = { ok: false };
@@ -114,25 +142,61 @@
   }
   const stateKey = (s) => [s.screen, s.lib || '', s.id || ''].join('|');
 
-  // ---------- navigation (real browser history) ----------
+  // ---------- navigation ----------
+  // Real browser history (so the glasses' Back gesture works), plus each screen remembers its own way back (`up`),
+  // so the on-screen Back / Exit never depend on the browser's history behaving.
+  let idSeq = 0;
+  const newId = () => Date.now().toString(36) + '.' + (++idSeq);
+  const unsynced = new Set();   // screens the browser has no history entry for
+  const chain = (st, n) => (!st || n <= 0 ? null : Object.assign({}, st, { up: chain(st.up, n - 1) }));
+
   function navigate(next) {
-    if (current.d >= MAX_INDEX) {
-      // Would exceed the host's 5-entry limit: replace instead of pushing.
-      next.d = current.d;
-      history.replaceState(next, '');
-    } else {
-      next.d = current.d + 1;
-      history.pushState(next, '');
-    }
+    next.nid = newId();                     // (navigation id; `id` is the movie/show/episode itself)
+    next.up = chain(current, 4);
+    let synced = false;
+    try {
+      if (current.d >= MAX_INDEX) {
+        // Would exceed the host's 5-entry limit: replace instead of pushing.
+        next.d = current.d;
+        history.replaceState(next, '');
+      } else {
+        next.d = current.d + 1;
+        history.pushState(next, '');
+        synced = !!(history.state && history.state.nid === next.nid);   // did the host actually keep the new entry?
+      }
+    } catch (e) { Log.add('history error ' + (e && e.name)); }
+    if (!synced) unsynced.add(next.nid);
+    Log.add('open ' + next.screen + (synced ? '' : ' (no history entry)') + ' hl=' + history.length);
     render(next);
   }
 
+  /** Go up one screen. Used by the Back button and the player's Exit. */
+  function goBack(source) {
+    const cur = current;
+    const up = cur.up || (cur.screen === 'libraries' ? null : ROOT);
+    Log.add(source + ' from ' + cur.screen);
+    if (!up) { history.back(); return; }                     // already at the top: let the system take over
+    if (unsynced.has(cur.nid)) { leaveInternally(cur, up); return; }
+    history.back();
+    // If the browser doesn't act on it, don't leave you stuck.
+    setTimeout(() => {
+      if (current === cur) { Log.add('history.back did nothing; leaving anyway'); leaveInternally(cur, up); }
+    }, 700);
+  }
+  function leaveInternally(cur, up) {
+    try { history.replaceState(up, ''); } catch (e) { /* ignore */ }
+    render(up);
+  }
+
   window.addEventListener('popstate', (e) => {
-    const s = e.state;
-    render(s && s.screen && s.screen !== 'player' ? s : ROOT);
+    let st = e.state;
+    if (!st || !st.screen) st = ROOT;
+    else if (st.screen === 'player') st = st.up || ROOT;      // nothing to resume: go to the movie's page instead
+    Log.add('system back to ' + st.screen + ' hl=' + history.length);
+    render(st);
   });
 
-  backBtn.addEventListener('click', () => history.back());
+  backBtn.addEventListener('click', () => goBack('back button'));
 
   // ---------- focus ----------
   // Track the last-focused row as it changes, so moving to Back and pressing Down returns to it.
@@ -294,14 +358,15 @@
     current = state;
     const seq = ++renderSeq;
 
-    if (prev && prev.screen === 'player' && !(state.screen === 'player' && state.id === prev.id)) teardownPlayer();
-
     const isPlayer = state.screen === 'player';
+    const leavingPlayer = !!prev && prev.screen === 'player' && !(isPlayer && state.id === prev.id);
     document.body.classList.toggle('mode-player', isPlayer);
     screenEl.hidden = isPlayer;
     playerEl.hidden = !isPlayer;
     topbar.hidden = isPlayer;
     brand.toggleAttribute('hidden', state.screen !== 'libraries');   // (SVG elements have no .hidden property, so use the attribute)
+    // Screen first, then stop the video: whatever goes wrong while stopping can no longer trap you on the player.
+    if (leavingPlayer) { try { detachPlayer(); } catch (e) { Log.add('stop error ' + (e && e.message)); } }
 
     try {
       switch (state.screen) {
@@ -309,6 +374,7 @@
         case 'movie': await showMovie(state, seq); break;
         case 'show': await showShow(state, seq); break;
         case 'season': await showSeason(state, seq); break;
+        case 'diag': showDiag(); break;
         case 'player': await showPlayer(state, seq); break;
         default: await showLibraries(seq);
       }
@@ -343,7 +409,8 @@
     if (skipped.length) {
       screenEl.append(h('p', { class: 'note' }, 'Not shown (this app plays movies and TV only): ' + skipped.map((l) => l.title).join(', ')));
     }
-    screenEl.append(h('p', { class: 'note note-ver' }, 'Plex Glasses v' + VERSION));
+    screenEl.append(h('p', { class: 'note note-ver' }, 'Plex Glasses v' + VERSION),
+      h('button', { class: 'btn btn-quiet', type: 'button', 'data-key': 'diag', onclick: () => navigate({ screen: 'diag' }) }, 'Diagnostics'));
     focusInitial();
   }
 
@@ -433,7 +500,7 @@
   }
 
   function renderLetters(state, idx) {
-    const remembered = lastLetter.get(state.lib);
+    const remembered = lastLetter.get(state.lib) || Plex.recall('letter.' + state.lib);
     const letter = idx.buckets.has(state.letter) ? state.letter
       : idx.buckets.has(remembered) ? remembered : idx.letters[0];
     const rowsHost = h('div', { id: 'rows', class: 'rows' });
@@ -463,9 +530,9 @@
   }
 
   function pickLetter(state, idx, strip, rowsHost, L) {
-    lastLetter.set(state.lib, L);
+    lastLetter.set(state.lib, L);            // Back from a title returns to this letter (remembered here, not in browser history)
+    Plex.remember('letter.' + state.lib, L);
     state.letter = L;
-    history.replaceState(state, '');           // Back from a title returns to this letter
     Array.prototype.forEach.call(strip.children, (c) => {
       if (c.dataset.key === 'ch:' + L) c.setAttribute('aria-current', 'true'); else c.removeAttribute('aria-current');
     });
@@ -551,6 +618,30 @@
       sub: s.leafCount ? s.leafCount + (s.leafCount === 1 ? ' episode' : ' episodes') : '',
       onSelect: () => navigate({ screen: 'season', id: s.ratingKey, title: s.title || 'Season ' + s.index, show: state.title }),
     })), 'No seasons found.');
+    focusInitial();
+  }
+
+  // ---------- screen: diagnostics ----------
+  function showDiag() {
+    setTitle('Diagnostics');
+    const v = document.createElement('video');
+    let host = '?';
+    try { host = new URL(Plex.server).host.slice(0, 44); } catch (e) { /* ignore */ }
+    const info = [
+      'App v' + VERSION,
+      (navigator.userAgent.match(/Chrome\/[\d.]+/) || ['browser ?'])[0],
+      'Native HLS: ' + (v.canPlayType('application/vnd.apple.mpegurl') || 'no') + '  MSE: ' + (window.MediaSource ? 'yes' : 'no'),
+      'History entries: ' + history.length,
+      'Server: ' + host,
+    ];
+    const block = (title, lines) => h('div', { class: 'diag-block' }, h('h3', { class: 'diag-h' }, title),
+      h('pre', { class: 'diag-pre' }, lines.length ? lines.join('\n') : '(nothing recorded)'));
+    screenEl.replaceChildren(h('div', { class: 'diag' },
+      block('This device', info),
+      block('Last session (before the latest restart)', Log.last().slice(-40)),
+      block('This session', Log.now().slice(-40)),
+      h('button', { class: 'btn', type: 'button', 'data-autofocus': '', onclick: () => { Log.clear(); showDiag(); } }, 'Clear log')));
+    screenEl.scrollTop = 0;
     focusInitial();
   }
 
@@ -681,7 +772,16 @@
     if (!ctrl.hidden && perr.hidden && !video.paused && !video.ended) P.hideTimer = setTimeout(hideControls, pb.controlsHideMs);
   }
 
+  let hintTimer = 0;
+  /** The Controls pill shows its label for a few seconds, then shrinks to three faint dots. */
+  function calmHint() {
+    clearTimeout(hintTimer);
+    surface.classList.remove('quiet');
+    hintTimer = setTimeout(() => surface.classList.add('quiet'), 3500);
+  }
+
   function showControls() {
+    clearTimeout(hintTimer);
     ctrl.hidden = false;
     topbar.hidden = false;
     updateProgress();
@@ -696,6 +796,7 @@
     ctrl.hidden = true;
     topbar.hidden = true;
     surface.hidden = false;
+    calmHint();
     surface.focus({ preventScroll: true });
   }
 
@@ -704,6 +805,7 @@
     perr.hidden = true;
     topbar.hidden = true;
     surface.hidden = false;
+    calmHint();
     fill.style.width = '0%';
     ptime.textContent = '';
     pstat.textContent = '';
@@ -782,6 +884,7 @@
     P.started = false;
     P.needAdvance = false;
     if (pos > 1) { P.guardUntil = 0; P.forceStart = false; }   // resuming mid-movie (after a fallback or quality change), not a fresh start
+    Log.add('start ' + mode + ' ' + ((P.qs[P.q] || {}).r || '?') + ' @' + ((P.qs[P.q] || {}).b || '?') + (pos > 1 ? ' from ' + fmtTime(pos) : ''));
     setLoading(true, message || (P.idx > 0 ? 'Trying another way (' + MODE_NAME[mode] + ')\u2026' : 'Starting the transcoder\u2026'));
     armWatchdog(my);
 
@@ -837,6 +940,7 @@
   function failMode(reason) {
     if (!P.item) return;
     const resumeAt = position();
+    Log.add('fail ' + MODE_NAME[P.mode] + ': ' + reason);
     P.errors.push(MODE_NAME[P.mode] + ': ' + reason);
     teardownEngine();
     P.idx += 1;
@@ -902,6 +1006,7 @@
   function onStall() {
     const now = Date.now();
     P.stalls += 1;
+    Log.add('stall ' + P.stalls + ' buf ' + Math.round(bufferedAhead()) + 's');
     P.stallTimes = P.stallTimes.filter((t) => now - t < 90000).concat(now);
     if (P.stallTimes.length >= 3 && P.q + 1 < P.qs.length) { stepDown(); return; }
     if (P.dur > 0 && P.dur - position() < 20) return;            // nearly at the end: just let it finish
@@ -945,27 +1050,42 @@
     if (!P.item) return;
     Plex.ping(P.session);
     Plex.timeline(P.item, video.paused && !P.rebuf ? 'paused' : 'playing', position() * 1000, P.dur * 1000, P.session);
+    Log.add('hb ' + fmtTime(position()) + ' buf ' + Math.round(bufferedAhead()) + 's ' + (video.paused ? 'paused' : 'playing') + ' stalls ' + P.stalls);
   }
 
-  function teardownPlayer() {
+  /** Stop everything that belongs to the current playback. Cheap, and safe to call at any time. */
+  function detachPlayer() {
     clearHide();
+    clearTimeout(hintTimer);
     clearInterval(P.tick);
-    teardownEngine();
     const item = P.item;
     const session = P.session;
-    const pos = position();
+    let pos = 0;
+    try { pos = position(); } catch (e) { /* ignore */ }
     P.item = null;
     P.streamSeq += 1;
     try { video.pause(); } catch (e) { /* ignore */ }
-    video.removeAttribute('src');
-    video.load();
-    if (item) {
-      Plex.timeline(item, 'stopped', pos * 1000, P.dur * 1000, session);
-      Plex.stop(session);
-    }
+    try { teardownEngine(); } catch (e) { Log.add('engine stop error'); }
     ctrl.hidden = true;
     perr.hidden = true;
     setLoading(false);
+    if (item) {
+      Log.add('stopped at ' + fmtTime(pos));
+      Plex.timeline(item, 'stopped', pos * 1000, P.dur * 1000, session);
+      Plex.stop(session);
+    }
+    // Letting go of the media can be slow (or even throw) on some players, so do it once the new screen is showing.
+    let done = false;
+    const go = () => { if (!done) { done = true; releaseMedia(); } };
+    if (window.requestAnimationFrame) requestAnimationFrame(() => setTimeout(go, 0));
+    setTimeout(go, 400);
+  }
+
+  function releaseMedia() {
+    if (P.item) return;      // a new playback has already started and replaces this one
+    const t = Date.now();
+    try { video.removeAttribute('src'); video.load(); } catch (e) { Log.add('release error ' + (e && e.message)); }
+    Log.add('media released in ' + (Date.now() - t) + 'ms');
   }
 
   function playerFailure(e) {
@@ -995,6 +1115,7 @@
   function fixStart(why) {
     const at = video.currentTime;
     P.startFix = Math.round(at);
+    Log.add('start corrected (was ' + Math.round(at) + 's)');
     P.forceStart = false;
     P.guardUntil = 0;
     try { video.currentTime = 0; } catch (e) { /* ignore */ }
@@ -1053,14 +1174,19 @@
   bRew.addEventListener('click', () => seekBy(-STEP));
   bFwd.addEventListener('click', () => seekBy(STEP));
   bPlay.addEventListener('click', togglePlay);
-  bExit.addEventListener('click', () => history.back()); // back to the movie's splash / the episode list
+  bExit.addEventListener('click', () => goBack('exit'));   // back to the movie's splash / the episode list
 
   // ---------- boot ----------
   try { history.scrollRestoration = 'manual'; } catch (e) { /* ignore */ }
   creds = Plex.init();
   const saved = history.state;
   let start = ROOT;
-  if (saved && saved.screen && saved.screen !== 'player') start = saved;
-  else history.replaceState(ROOT, '');
+  if (saved && saved.screen) {
+    start = saved.screen === 'player' ? (saved.up || ROOT) : saved;   // restarted while playing: return to the movie's page
+    if (start !== saved) { try { history.replaceState(start, ''); } catch (e) { /* ignore */ } }
+  } else {
+    history.replaceState(ROOT, '');
+  }
+  Log.add('start app v' + VERSION + ' at ' + start.screen);
   render(start);
 })();

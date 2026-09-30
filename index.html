@@ -10,7 +10,7 @@
   <meta name="theme-color" content="#000000">
   <!-- PNG favicon (>52px): SVG favicons are a known issue on the glasses -->
   <link rel="icon" type="image/png" sizes="128x128" href="icons/favicon.png">
-  <link rel="stylesheet" href="css/style.css?v=4">
+  <link rel="stylesheet" href="css/style.css?v=5">
 </head>
 <body>
   <div id="app" class="app-shell">
@@ -31,7 +31,7 @@
       <video id="video" playsinline preload="auto" disablepictureinpicture disableremoteplayback></video>
 
       <!-- Small visible pill (always focusable): select on it opens the playback controls -->
-      <button id="surface" class="hint" type="button" aria-label="Show playback controls">Controls</button>
+      <button id="surface" class="hint" type="button" aria-label="Show playback controls"><span class="hint-text">Controls</span><span class="hint-dots" aria-hidden="true">&middot;&middot;&middot;</span></button>
 
       <div id="loading" class="loading" role="status" hidden>
         <span class="spinner" aria-hidden="true"></span><span id="loadmsg">Loading&hellip;</span>
@@ -59,8 +59,8 @@
   </div>
   <noscript>This app needs JavaScript.</noscript>
 
-  <script src="config.js?v=4"></script>
-  <script src="js/plex.js?v=4"></script>
-  <script src="js/app.js?v=4"></script>
+  <script src="config.js?v=5"></script>
+  <script src="js/plex.js?v=5"></script>
+  <script src="js/app.js?v=5"></script>
 </body>
 </html>
