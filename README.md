@@ -1,4 +1,4 @@
-# Plex for Meta Ray-Ban Display (v3)
+# Plex for Meta Ray-Ban Display (v4)
 
 A Plex client web app for the Meta Ray-Ban Display glasses. Libraries, list views, movie splash
 screens, season/episode browsing, and a fullscreen player. The Plex server does the
@@ -95,7 +95,8 @@ Use the middle tap for the Web App menu (**Restart / Resume / Permissions**).
 | `libraryOrder` | Library names to list first, in this order. Every other movie/TV library follows in the server's order. `[]` = server order |
 | `requestTimeoutSeconds` | How long to wait for the server before giving up on one request (15) |
 | `playback.strategy` | `"auto"` (default): try every method in turn. Or force `"hls"` or `"mp4"` |
-| `playback.videoResolution` / `maxVideoBitrate` | Size and bitrate the server encodes to. Default 640x360 @ 1200 kbps: the display is 600 pixels wide, so this looks the same as 480p but is much lighter |
+| `playback.videoResolution` / `maxVideoBitrate` | Size and bitrate the server encodes to. Default 480x270 @ 600 kbps: small, but good on a 600-pixel display and light enough for smooth playback. The bitrate is the number that matters most: lower it for fewer stalls, raise it for more detail |
+| `playback.hlsEngine` | `"auto"` (default): the browser's own HLS player first. `"hlsjs"`: try the hls.js library first (it handles tiny gaps between video chunks differently, worth a try if you still see very short stalls). The stats line shows which one is running |
 | `playback.autoLowerQuality` | If playback keeps stalling (3 times in 90 s) step down to a lighter stream automatically (default on) |
 | `playback.rebufferSeconds` / `rebufferMaxSeconds` | With hls.js, after a stall wait for this many seconds to be stored up (10) but never longer than the maximum (25) |
 | `playback.forceTranscode` | `true` = always re-encode video (default). `false` lets Plex copy already-compatible video |
@@ -150,11 +151,21 @@ Watch the stats line under the progress bar (open the controls). A few things it
 - **buffer stays near 0s and stalls climb:** the stream isn't arriving as fast as it plays. The app lowers the
   quality by itself after three stalls in 90 seconds, and you can lower the defaults in `config.js` too
   (`"480x270"` and `700`).
+- **Tiny stalls (fractions of a second) even though the buffer is healthy** are usually small hiccups where one
+  video chunk meets the next, not a shortage of data. Lowering the bitrate helps a little; trying
+  `hlsEngine: "hlsjs"` in `config.js` is the other thing to test.
 - **The server is the bottleneck.** In Plex Web open **Settings > Status > Dashboard** while it plays and look at the
   transcode entry. If its speed is below 1.0x your server can't encode fast enough: use a lower resolution, or turn
   on hardware transcoding (needs Plex Pass) if the server has a supported graphics chip.
 - **Try letting Plex copy the video** (`forceTranscode: false`). If your files are already H.264 this uses almost no
   server power, but the video is sent at its original bitrate, which may be too heavy for the glasses' connection.
+
+## Where playback starts
+
+Every play starts at 0:00, even if you stopped part-way through last time. Some HLS players start a stream near its
+newest end instead of the beginning, so the app tells the player to start at 0, and if a stream still begins
+somewhere else (or jumps ahead in its first 15 seconds) it steps back to the start. When that happens the stats line
+says "start fixed (was Ns)". Your own -15s / +15s presses are never overridden.
 
 ## About the logo
 

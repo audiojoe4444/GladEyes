@@ -14,10 +14,10 @@
 (function () {
   'use strict';
 
-  const VERSION = '3';
+  const VERSION = '4';
   const cfg = window.PLEX_CONFIG || {};
   const pb = Object.assign({
-    strategy: 'auto', container: 'mp4', videoResolution: '640x360', maxVideoBitrate: 1200,
+    strategy: 'auto', hlsEngine: 'auto', container: 'mp4', videoResolution: '480x270', maxVideoBitrate: 600,
     forceTranscode: true, seekStepSeconds: 15, controlsHideMs: 6000, startTimeoutSeconds: 45, hlsJsUrl: '',
     rebufferSeconds: 10, rebufferMaxSeconds: 25, autoLowerQuality: true,
   }, cfg.playback || {});
@@ -584,12 +584,12 @@
   const P = {
     item: null, session: '', mode: '', ladder: [], idx: 0, errors: [], qs: [], q: 0,
     offset: 0, base: 0, baseSet: false, dur: 0, streamSeq: 0, pending: null, started: false,
-    needAdvance: false, advFrom: 0, stalls: 0, stallTimes: [], rebuf: false, rebufTimer: 0,
-    hideTimer: 0, tick: 0, watchdog: 0, hls: null, decisionText: '',
+    needAdvance: false, advFrom: 0, forceStart: false, guardUntil: 0, startFix: 0, stalls: 0, stallTimes: [], rebuf: false, rebufTimer: 0,
+    guardT0: 0, hideTimer: 0, tick: 0, watchdog: 0, hls: null, decisionText: '',
   };
   const MODE_NAME = { 'hls-native': 'HLS', 'hls-js': 'HLS (hls.js)', mp4: 'MP4' };
   // If playback keeps stalling, the app steps down through these (only ones below your configured quality are used).
-  const QUALITY = [{ r: '854x480', b: 2000 }, { r: '640x360', b: 1200 }, { r: '480x270', b: 700 }, { r: '426x240', b: 400 }];
+  const QUALITY = [{ r: '854x480', b: 2000 }, { r: '640x360', b: 1200 }, { r: '480x270', b: 700 }, { r: '426x240', b: 400 }, { r: '320x180', b: 250 }];
   // A 1x1 transparent picture: stops the browser drawing its own grey "play" placeholder over the black screen.
   const BLANK = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
 
@@ -617,8 +617,9 @@
     const nativeHls = !!(video.canPlayType('application/vnd.apple.mpegurl') || video.canPlayType('application/x-mpegURL'));
     const mse = !!(window.MediaSource || window.ManagedMediaSource);
     if (pb.strategy !== 'mp4') {
-      if (nativeHls) ladder.push('hls-native');
-      if (mse) ladder.push('hls-js');
+      // hlsEngine "hlsjs" tries the hls.js library before the browser's own HLS player (default is the reverse)
+      const order = pb.hlsEngine === 'hlsjs' ? ['hls-js', 'hls-native'] : ['hls-native', 'hls-js'];
+      order.forEach((m) => { if ((m === 'hls-native' && nativeHls) || (m === 'hls-js' && mse)) ladder.push(m); });
     }
     if (pb.strategy !== 'hls') ladder.push('mp4');
     if (!ladder.length) ladder.push('hls-native');
@@ -670,6 +671,7 @@
       q ? q.r.replace('x', '\u00D7') + ' @ ' + q.b / 1000 + ' Mbps' : '',
       'buffer ' + Math.round(bufferedAhead()) + 's',
       'stalls ' + P.stalls,
+      P.startFix ? 'start fixed (was ' + P.startFix + 's)' : '',
     ].filter(Boolean).join(' \u00B7 ');
   }
 
@@ -728,6 +730,9 @@
     P.stallTimes = [];
     P.rebuf = false;
     clearTimeout(P.rebufTimer);
+    P.forceStart = true;      // a fresh start always begins at 0:00 (see fixStart)
+    P.guardUntil = 0;
+    P.startFix = 0;
     P.pending = null;
     P.streamSeq = 0;
     P.dur = (item.duration || 0) / 1000;
@@ -776,6 +781,7 @@
     P.mode = mode;
     P.started = false;
     P.needAdvance = false;
+    if (pos > 1) { P.guardUntil = 0; P.forceStart = false; }   // resuming mid-movie (after a fallback or quality change), not a fresh start
     setLoading(true, message || (P.idx > 0 ? 'Trying another way (' + MODE_NAME[mode] + ')\u2026' : 'Starting the transcoder\u2026'));
     armWatchdog(my);
 
@@ -795,7 +801,8 @@
     if (mode === 'hls-native') {
       video.src = url;
       video.load();
-      if (pos > 1) video.addEventListener('loadedmetadata', () => { try { video.currentTime = pos; } catch (e) { /* ignore */ } }, { once: true });
+      // Be explicit about where to begin: some players start a growing HLS playlist near its newest end.
+      video.addEventListener('loadedmetadata', () => { try { video.currentTime = pos > 1 ? pos : 0; } catch (e) { /* ignore */ } }, { once: true });
       playSafe();
       return;
     }
@@ -807,7 +814,7 @@
       const hls = new window.Hls({
         enableWorker: true, lowLatencyMode: false, startFragPrefetch: true,
         maxBufferLength: 60, maxMaxBufferLength: 120, maxBufferSize: 80 * 1000 * 1000, backBufferLength: 20,
-        startPosition: pos > 1 ? pos : -1,
+        startPosition: pos > 1 ? pos : 0,     // 0 = the beginning (the default -1 would start a live-style playlist at its newest end)
       });
       P.hls = hls;
       let mediaFixes = 0;
@@ -872,6 +879,7 @@
 
   /** Seek to an absolute position in the movie. */
   function seekTo(pos) {
+    P.guardUntil = 0; P.forceStart = false;   // the user is in charge from here
     const max = P.dur > 0 ? Math.max(0, P.dur - 2) : Infinity;
     pos = Math.min(Math.max(0, pos), max);
     if (P.mode !== 'mp4') { video.currentTime = pos; updateProgress(); return; }  // HLS: the stream is the whole movie
@@ -983,7 +991,23 @@
   });
   // "playing" can fire before there is a picture (the browser is still filling its buffer),
   // so the spinner stays until the clock has really moved.
+  /** If HLS begins somewhere other than the start of a fresh play, jump back to 0:00. */
+  function fixStart(why) {
+    const at = video.currentTime;
+    P.startFix = Math.round(at);
+    P.forceStart = false;
+    P.guardUntil = 0;
+    try { video.currentTime = 0; } catch (e) { /* ignore */ }
+    P.advFrom = 0;
+    P.needAdvance = true;
+    return why;
+  }
+
   video.addEventListener('playing', () => {
+    if (P.forceStart && P.mode !== 'mp4') {
+      if (video.currentTime > 1.5) fixStart('start');
+      else { P.forceStart = false; P.guardUntil = Date.now() + 15000; P.guardT0 = Date.now(); }   // watch the first 15 s for a late jump
+    }
     P.needAdvance = true;
     P.advFrom = video.currentTime;
     setPlayLabel(false);
@@ -991,6 +1015,11 @@
     armHide();
   });
   video.addEventListener('timeupdate', () => {
+    // A player that jumps ahead shortly after starting (live-edge behaviour): the clock can't be ahead of real time + a few seconds.
+    if (P.guardUntil && P.mode !== 'mp4') {
+      if (Date.now() > P.guardUntil) P.guardUntil = 0;
+      else if (video.currentTime > (Date.now() - P.guardT0) / 1000 + 4) fixStart('jump');
+    }
     if (P.needAdvance && !video.paused && Math.abs(video.currentTime - P.advFrom) > 0.25) {
       P.needAdvance = false;
       P.started = true;

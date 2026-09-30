@@ -26,9 +26,10 @@ window.PLEX_CONFIG = {
     // "auto" tries, in order: HLS in the browser -> HLS via hls.js -> progressive MP4,
     // moving on by itself if one fails.  Or force one family:  "hls"  |  "mp4"
     strategy: "auto",
+    hlsEngine: "auto",           // "auto" = the browser's own HLS player first. "hlsjs" = try the hls.js library first
     container: "mp4",            // container for the progressive MP4 fallback
-    videoResolution: "640x360",  // the display is 600 pixels wide, so 640x360 looks the same as 480p and is far lighter
-    maxVideoBitrate: 1200,       // kbps
+    videoResolution: "480x270",  // small, but the display is only 600 pixels wide and it looks good; raise it if you want more detail
+    maxVideoBitrate: 600,        // kbps. This is the number that matters most for smooth playback: lower = fewer stalls
     forceTranscode: true,        // true = server always re-encodes to H.264 + AAC stereo (never direct-streams the video)
     seekStepSeconds: 15,
     controlsHideMs: 6000,        // playback controls auto-hide after this long while playing
