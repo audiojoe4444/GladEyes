@@ -14,12 +14,13 @@
 (function () {
   'use strict';
 
-  const VERSION = '5';
+  const VERSION = '6';
   const cfg = window.PLEX_CONFIG || {};
   const pb = Object.assign({
     strategy: 'auto', hlsEngine: 'auto', container: 'mp4', videoResolution: '480x270', maxVideoBitrate: 600,
     forceTranscode: true, seekStepSeconds: 15, controlsHideMs: 6000, startTimeoutSeconds: 45, hlsJsUrl: '',
     rebufferSeconds: 10, rebufferMaxSeconds: 25, autoLowerQuality: true,
+    relayResolution: '426x240', relayBitrate: 400,
   }, cfg.playback || {});
   const STEP = pb.seekStepSeconds;
   const MAX_INDEX = 4;     // host keeps at most 5 history entries (indexes 0..4)
@@ -134,6 +135,10 @@
   let creds = { ok: false };
   const focusMemory = new Map();
   const lastLetter = new Map();
+  let libCtx = null;            // the A-Z screen that is showing (for left/right letter stepping)
+  let signTimers = [];
+  let connecting = null;
+  const NEEDS_SERVER = new Set(['library', 'movie', 'show', 'season', 'player']);
   const cache = { libs: null, items: new Map(), meta: new Map(), kids: new Map() };
 
   function cached(map, key, load) {
@@ -186,6 +191,30 @@
   function leaveInternally(cur, up) {
     try { history.replaceState(up, ''); } catch (e) { /* ignore */ }
     render(up);
+  }
+
+  /** Back to the Libraries screen as the new top of the stack (after signing in/out, choosing a server...). */
+  function goHome() {
+    try { history.replaceState(ROOT, ''); } catch (e) { /* ignore */ }
+    render(ROOT);
+  }
+  function resetCaches() {
+    cache.libs = null; cache.items.clear(); cache.meta.clear(); cache.kids.clear();
+    focusMemory.clear(); lastLetter.clear();
+  }
+  function clearSignTimers() { signTimers.forEach((t) => { clearTimeout(t); clearInterval(t); }); signTimers = []; }
+
+  /** Make sure we're connected to the server (finding it through Plex if the saved address no longer works). */
+  function ensureReady() {
+    if (Plex.connected) return Promise.resolve();
+    if (!Plex.hasCredentials()) return Promise.reject(failure('needsignin'));
+    if (!connecting) {
+      Log.add('connecting');
+      connecting = Plex.connect((t) => { const el = $('#loadtext'); if (el) el.textContent = t; })
+        .then((hit) => { Log.add('connected via ' + hit.type); return hit; })
+        .finally(() => { connecting = null; });
+    }
+    return connecting;
   }
 
   window.addEventListener('popstate', (e) => {
@@ -259,6 +288,13 @@
 
     // Library screen with the A-Z strip: strip sits between Back and the list.
     const strip = screenEl.hidden ? null : $('#letters', screenEl);
+    if (strip && libCtx && libCtx.strip === strip) {
+      // Right / Left from the list (or the strip) step to the next / previous letter, with focus on that letter.
+      const onLib = a.classList.contains('item') || a.classList.contains('chip');
+      if (onLib && e.key === 'ArrowRight') { e.preventDefault(); stepLetter(1); return; }
+      if (onLib && e.key === 'ArrowLeft' && letterIndex() > 0) { e.preventDefault(); stepLetter(-1); return; }
+      // (on the first letter, Left falls through to the Back-button rule below)
+    }
     if (strip) {
       if (e.key === 'ArrowDown' && a.classList.contains('chip')) {
         const first = $('#rows .item', screenEl);
@@ -325,22 +361,31 @@
     let msg = e && e.message ? e.message : 'Unexpected error.';
     let detail = '';
     const host = (function () { try { return new URL(Plex.server).host; } catch (x) { return Plex.server; } })();
-    if (e && e.kind === 'setup') {
-      title = 'One-time setup needed';
-      msg = 'This app needs your Plex token.';
-      detail = 'Open the app once from your launch link, which ends in #token=YOUR_TOKEN (README, step 3).';
-    } else if (e && e.kind === 'auth') {
-      title = 'Plex rejected the token';
-      msg = 'The saved token is no longer valid.';
-      detail = 'Open the app from a fresh launch link with a new #token=\u2026 (README, step 3).';
-    } else if (e && e.kind === 'network') {
+    const buttons = [{ label: 'Try again', primary: true, run: () => render(current) }];
+    const settings = { label: 'Settings', run: () => navigate({ screen: 'settings' }) };
+    const signInAgain = { label: 'Sign in again', primary: true, run: () => { Plex.signOut(); resetCaches(); goHome(); } };
+    if (e && e.kind === 'auth') {
+      title = 'Plex rejected the sign-in';
+      msg = 'Your saved sign-in is no longer valid.';
+      detail = Plex.viaLink ? 'You opened the app from a link that contains a token. Replace it with a fresh one (README, step 3), or use a link without a token and sign in with a code.' : '';
+      buttons.splice(0, 1, signInAgain);
+    } else if (e && e.kind === 'unreachable') {
+      const tried = (e.tried || []).map((t) => ({ local: 'home network', remote: 'remote', relay: 'relay' }[t] || t));
       title = 'Can\u2019t reach your Plex server';
+      msg = tried.length ? 'Tried: ' + tried.join(', ') + '.' : 'No address worked.';
+      detail = 'Check the server is on. Away from home it also needs Remote Access turned on (Plex > Settings > Remote Access), or Plex\u2019s relay to be available.';
+      buttons.push(settings);
+    } else if (e && e.kind === 'noserver') {
+      title = 'No Plex server found';
+      msg = 'Your Plex account doesn\u2019t have a Plex Media Server that this app can use.';
+      detail = 'Check you signed in with the right account, and that the server is signed in to it.';
+      buttons.push({ label: 'Sign out', run: () => { Plex.signOut(); resetCaches(); goHome(); } });
+    } else if (e && (e.kind === 'network' || e.kind === 'timeout')) {
+      title = e.kind === 'timeout' ? 'Your Plex server isn\u2019t answering' : 'Can\u2019t reach your Plex server';
       msg = 'Server: ' + host;
-      detail = 'The glasses (via your phone) must be able to reach that address, and the server must allow browser requests (CORS). A 192.168.x.x address only works on your home network.';
-    } else if (e && e.kind === 'timeout') {
-      title = 'Your Plex server isn\u2019t answering';
-      msg = 'Server: ' + host;
-      detail = 'It took too long to reply. Check the server is awake and the connection is good, then try again.';
+      detail = e.kind === 'timeout' ? 'It took too long to reply. Check the server is awake and the connection is good, then try again.'
+        : 'The glasses (via your phone) must be able to reach that address, and the server must allow browser requests (CORS).';
+      buttons.push(settings);
     } else if (e && e.kind === 'libs') {
       title = 'No movie or TV libraries';
       msg = 'This server has no movie or TV show libraries this app can play.';
@@ -348,7 +393,7 @@
     }
     screenEl.replaceChildren(h('div', { class: 'panel', role: 'alert' },
       h('h2', {}, title), h('p', {}, msg), detail ? h('p', { class: 'small' }, detail) : null,
-      h('button', { class: 'btn btn-primary', type: 'button', 'data-autofocus': '', onclick: () => render(current) }, 'Try again')));
+      buttons.map((b, i) => h('button', { class: 'btn' + (b.primary ? ' btn-primary' : ''), type: 'button', 'data-autofocus': i === 0 ? '' : false, onclick: b.run }, b.label))));
     focusInitial();
   }
 
@@ -357,6 +402,8 @@
     const prev = current;
     current = state;
     const seq = ++renderSeq;
+    libCtx = null;
+    clearSignTimers();
 
     const isPlayer = state.screen === 'player';
     const leavingPlayer = !!prev && prev.screen === 'player' && !(isPlayer && state.id === prev.id);
@@ -369,7 +416,11 @@
     if (leavingPlayer) { try { detachPlayer(); } catch (e) { Log.add('stop error ' + (e && e.message)); } }
 
     try {
+      if (NEEDS_SERVER.has(state.screen)) { await ensureReady(); if (seq !== renderSeq) return; }
       switch (state.screen) {
+        case 'settings': showSettings(); break;
+        case 'servers': await showServers(seq); break;
+        case 'manual': showManual(); break;
         case 'library': await showLibrary(state, seq); break;
         case 'movie': await showMovie(state, seq); break;
         case 'show': await showShow(state, seq); break;
@@ -380,6 +431,8 @@
       }
     } catch (e) {
       if (seq !== renderSeq) return;
+      if (e && e.kind === 'needsignin') { goHome(); return; }
+      if (e && e.kind === 'choose') { showServers(seq, e.servers); return; }
       if (isPlayer) { playerFailure(e); } else { showFailure(e); }
     }
   }
@@ -387,8 +440,10 @@
   // ---------- screen: Libraries ----------
   async function showLibraries(seq) {
     setTitle('Libraries');
-    if (!creds.ok) throw failure('setup');
-    showLoading();
+    if (!Plex.hasCredentials()) { showSignIn(seq); return; }
+    showLoading('Connecting\u2026');
+    await ensureReady();
+    if (seq !== renderSeq) return;
     const libs = await getLibraries();
     if (seq !== renderSeq) return;
 
@@ -409,8 +464,10 @@
     if (skipped.length) {
       screenEl.append(h('p', { class: 'note' }, 'Not shown (this app plays movies and TV only): ' + skipped.map((l) => l.title).join(', ')));
     }
+    const where = { local: 'your home network', remote: 'a remote connection', relay: 'Plex relay (slow, so video quality is lowered)' }[Plex.connType];
+    if (where) screenEl.append(h('p', { class: 'note' }, 'Connected via ' + where + (Plex.serverName ? ' \u00B7 ' + Plex.serverName : '')));
     screenEl.append(h('p', { class: 'note note-ver' }, 'Plex Glasses v' + VERSION),
-      h('button', { class: 'btn btn-quiet', type: 'button', 'data-key': 'diag', onclick: () => navigate({ screen: 'diag' }) }, 'Diagnostics'));
+      h('button', { class: 'btn btn-quiet', type: 'button', 'data-key': 'settings', onclick: () => navigate({ screen: 'settings' }) }, 'Settings'));
     focusInitial();
   }
 
@@ -512,10 +569,11 @@
         'aria-label': (L === '#' ? 'Numbers and symbols' : L) + ', ' + n + ' titles',
         'aria-current': L === letter ? 'true' : false,
       }, L);
-      b.addEventListener('click', () => pickLetter(state, idx, strip, rowsHost, L));
+      b.addEventListener('click', () => pickLetter(state, idx, strip, rowsHost, L, 'row'));
       strip.append(b);
     });
     screenEl.replaceChildren(h('div', { class: 'lib' }, strip, rowsHost));
+    libCtx = { state, idx, strip, rowsHost, letter };
     screenEl.scrollTop = 0;
 
     // Coming back from a title: draw enough rows to include the one that was selected.
@@ -529,17 +587,34 @@
     fillRows(rowsHost, sorted, limit);
   }
 
-  function pickLetter(state, idx, strip, rowsHost, L) {
+  /** Show a letter's titles. `focus` says where the cursor goes afterwards: the first title, or the letter itself. */
+  function pickLetter(state, idx, strip, rowsHost, L, focus) {
     lastLetter.set(state.lib, L);            // Back from a title returns to this letter (remembered here, not in browser history)
     Plex.remember('letter.' + state.lib, L);
     state.letter = L;
+    if (libCtx) libCtx.letter = L;
     Array.prototype.forEach.call(strip.children, (c) => {
       if (c.dataset.key === 'ch:' + L) c.setAttribute('aria-current', 'true'); else c.removeAttribute('aria-current');
     });
     fillRows(rowsHost, idx.sorted(L), PAGE);
     screenEl.scrollTop = 0;
-    const first = $('.item', rowsHost);
-    if (first) first.focus();
+    if (focus === 'chip') {
+      const chip = $('[aria-current="true"]', strip);
+      if (chip) chip.focus();
+    } else {
+      const first = $('.item', rowsHost);
+      if (first) first.focus();
+    }
+  }
+
+  const letterIndex = () => (libCtx ? libCtx.idx.letters.indexOf(libCtx.letter) : -1);
+  /** Right / Left from the list: move to the next / previous letter, cursor on that letter in the strip. */
+  function stepLetter(dir) {
+    if (!libCtx) return;
+    const i = letterIndex() + dir;
+    if (i < 0 || i >= libCtx.idx.letters.length) return;
+    Log.add('letter ' + libCtx.idx.letters[i]);
+    pickLetter(libCtx.state, libCtx.idx, libCtx.strip, libCtx.rowsHost, libCtx.idx.letters[i], 'chip');
   }
 
   /** Draw a letter's titles, PAGE at a time, with a "Show more" row at the end. */
@@ -621,6 +696,149 @@
     focusInitial();
   }
 
+  // ---------- screen: sign in with a code ----------
+  async function showSignIn(seq) {
+    setTitle('Sign in');
+    const box = h('div', { class: 'signin' });
+    screenEl.replaceChildren(box);
+    box.append(h('div', { class: 'status', role: 'status' }, h('span', { class: 'spinner', 'aria-hidden': 'true' }), h('span', {}, 'Getting a code from plex.tv\u2026')));
+    const manual = () => navigate({ screen: 'manual' });
+    let pin;
+    try {
+      pin = await Plex.startPin();
+    } catch (e) {
+      if (seq !== renderSeq) return;
+      Log.add('pin failed: ' + (e && e.kind));
+      box.replaceChildren(h('div', { class: 'panel', role: 'alert' },
+        h('h2', {}, 'Can\u2019t reach plex.tv'),
+        h('p', { class: 'small' }, 'The glasses need an internet connection to sign in. Check the connection and try again.'),
+        h('button', { class: 'btn btn-primary', type: 'button', 'data-autofocus': '', onclick: () => render(current) }, 'Try again'),
+        h('button', { class: 'btn', type: 'button', onclick: manual }, 'Use a token instead')));
+      focusInitial();
+      return;
+    }
+    if (seq !== renderSeq) return;
+    Log.add('sign-in code shown');
+    const timerEl = h('p', { class: 'signin-timer' }, '');
+    box.replaceChildren(
+      h('h2', { class: 'signin-h' }, 'Sign in to Plex'),
+      h('p', { class: 'signin-p' }, 'On your phone or computer, go to'),
+      h('p', { class: 'signin-url' }, 'plex.tv/link'),
+      h('p', { class: 'signin-p' }, 'and enter this code:'),
+      h('div', { class: 'code', 'aria-label': 'Code ' + pin.code.split('').join(' ') }, pin.code.toUpperCase().split('').join(' ')),
+      timerEl,
+      h('p', { class: 'signin-p small' }, 'This screen continues by itself once you\u2019ve entered it.'),
+      h('button', { class: 'btn btn-quiet', type: 'button', 'data-autofocus': '', onclick: manual }, 'Use a token instead'));
+    focusInitial();
+
+    const live = () => seq === renderSeq && current.screen === 'libraries';
+    const drawTimer = () => {
+      const left = Math.max(0, Math.round((pin.expires - Date.now()) / 1000));
+      timerEl.textContent = 'Code valid for ' + Math.floor(left / 60) + ':' + String(left % 60).padStart(2, '0');
+      if (!left && live()) render(current);                      // expired: show a fresh code
+    };
+    drawTimer();
+    signTimers.push(setInterval(() => { if (live()) drawTimer(); }, 1000));
+    const poll = async () => {
+      if (!live()) return;
+      try {
+        const token = await Plex.checkPin(pin);
+        if (!live()) return;
+        if (token) {
+          Log.add('signed in with a code');
+          await Plex.signedIn(token);
+          if (!live()) return;
+          resetCaches();
+          render(current);
+          return;
+        }
+      } catch (e) {
+        if (!live()) return;
+        if (e && e.status === 404) { render(current); return; }  // the code expired: show a fresh one
+      }
+      signTimers.push(setTimeout(poll, 2000));
+    };
+    signTimers.push(setTimeout(poll, 2000));
+  }
+
+  // ---------- screen: use a token by hand ----------
+  function showManual() {
+    setTitle('Use a token');
+    const field = (label, attrs) => h('label', { class: 'field-l' }, label, h('input', Object.assign({ class: 'field', autocomplete: 'off', autocapitalize: 'off', spellcheck: 'false' }, attrs)));
+    const server = field('Server address (optional)', { type: 'url', name: 'server', value: Plex.server || '', placeholder: 'https://\u2026plex.direct:32400' });
+    const token = field('Plex token', { type: 'text', name: 'token', placeholder: 'your X-Plex-Token' });
+    const msgEl = h('p', { class: 'small' }, '');
+    const save = () => {
+      const t = $('input', token).value.trim();
+      if (!t) { msgEl.textContent = 'Enter a token first.'; return; }
+      Plex.setManual($('input', server).value.trim(), t);
+      resetCaches();
+      goHome();
+    };
+    screenEl.replaceChildren(h('div', { class: 'panel' },
+      h('p', { class: 'small' }, 'Signing in with a code is easier. This is for people who already have their Plex token (and maybe the server\u2019s address).'),
+      server, token, msgEl,
+      h('button', { class: 'btn btn-primary', type: 'button', onclick: save }, 'Save and continue')));
+    screenEl.scrollTop = 0;
+    focusInitial();
+  }
+
+  // ---------- screen: choose a server ----------
+  async function showServers(seq, list) {
+    setTitle('Choose server');
+    if (!list) {
+      showLoading('Asking Plex\u2026');
+      list = await Plex.discoverServers();
+      if (seq !== renderSeq) return;
+    }
+    if (!list.length) throw failure('noserver');
+    showList(list.map((srv) => ({
+      key: 'srv:' + srv.id,
+      label: srv.name,
+      sub: (srv.owned ? 'Yours' : 'Shared with you') + (Plex.connected && srv.id === Plex.serverId ? ' \u00B7 connected' : ''),
+      onSelect: () => {
+        Log.add('server chosen');
+        Plex.chooseServer(srv);
+        resetCaches();
+        if (current.screen === 'servers') goHome(); else render(current);
+      },
+    })));
+    focusInitial();
+  }
+
+  // ---------- screen: settings ----------
+  function showSettings() {
+    setTitle('Settings');
+    const who = Plex.authMode === 'pin' ? 'Signed in' + (Plex.userName ? ' as ' + Plex.userName : '') : 'Signed in with a token';
+    const how = { local: 'your home network', remote: 'a remote connection', relay: 'Plex relay (slow, so video quality is lowered)' }[Plex.connType] || 'not connected';
+    let host = '';
+    try { host = new URL(Plex.server).host; } catch (e) { /* ignore */ }
+    const rows = [];
+    if (Plex.accountToken) rows.push({ key: 'st:server', label: 'Change server', sub: Plex.serverName || 'Choose which Plex server to use', onSelect: () => navigate({ screen: 'servers' }) });
+    rows.push({ key: 'st:reconnect', label: 'Reconnect', sub: 'Test the connection again', onSelect: () => { Plex.connected = false; resetCaches(); goHome(); } });
+    rows.push({ key: 'st:diag', label: 'Diagnostics', sub: 'What the app has been doing', onSelect: () => navigate({ screen: 'diag' }) });
+    let armed = false;
+    rows.push({
+      key: 'st:out', label: 'Sign out', sub: 'Forget this account on the glasses',
+      onSelect: (ev) => {
+        if (!armed) { armed = true; $('.item-sub', ev.currentTarget).textContent = 'Select again to confirm'; return; }
+        Log.add('signed out');
+        Plex.signOut();
+        resetCaches();
+        goHome();
+      },
+    });
+    const ul = h('ul', { class: 'list' });
+    rows.forEach((r) => ul.append(h('li', {}, makeItem(r))));
+    screenEl.replaceChildren(h('div', { class: 'info' },
+      h('p', {}, who),
+      h('p', {}, 'Server: ' + (Plex.serverName || host || 'not chosen yet') + (host && Plex.serverName ? ' (' + host + ')' : '')),
+      h('p', {}, 'Connection: ' + how)), ul);
+    if (Plex.viaLink) screenEl.append(h('p', { class: 'note' }, 'Your launch link contains a token, so this app will sign in again on its next start. To stop that, edit the link in the Meta AI app and remove the #token part.'));
+    screenEl.scrollTop = 0;
+    focusInitial();
+  }
+
   // ---------- screen: diagnostics ----------
   function showDiag() {
     setTitle('Diagnostics');
@@ -690,7 +908,9 @@
     return Object.assign({}, pb, { protocol, videoResolution: q.r, maxVideoBitrate: q.b });
   };
   function buildQualities() {
-    const first = { r: pb.videoResolution, b: pb.maxVideoBitrate };
+    let first = { r: pb.videoResolution, b: pb.maxVideoBitrate };
+    // Plex's relay is slow, so start lighter when that's how we're connected.
+    if (Plex.connType === 'relay' && pb.relayBitrate && pb.relayBitrate < first.b) first = { r: pb.relayResolution, b: pb.relayBitrate };
     return [first].concat(pb.autoLowerQuality ? QUALITY.filter((q) => q.b < first.b) : []);
   }
 

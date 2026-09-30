@@ -21,7 +21,27 @@
       mem[k] = v;
       try { window.localStorage.setItem(k, v); } catch (e) { /* ignore */ }
     },
+    del(k) {
+      delete mem[k];
+      try { window.localStorage.removeItem(k); } catch (e) { /* ignore */ }
+    },
   };
+  const readJson = (k) => { try { return JSON.parse(store.get(k) || 'null'); } catch (e) { return null; } };
+
+  // ---------- finding a working address for the server ----------
+  const PRI = { local: 0, remote: 1, relay: 2 };                  // preference: home network, then direct remote, then Plex relay
+  const DELAY = { local: 0, remote: 400, relay: 1500 };           // start the slower options a little later
+  const PROBE_MS = { local: 2500, remote: 5000, relay: 8000 };
+  const TYPE_LABEL = { local: 'your home network', remote: 'a remote connection', relay: 'Plex relay' };
+  // HTTPS only (the page is HTTPS), except this computer itself, which is allowed for testing.
+  const okUri = (u) => /^https:\/\//i.test(u) || /^http:\/\/(localhost|127(\.\d+){3}|\[::1\])(:|\/|$)/i.test(u);
+  function guessType(uri) {
+    const m = /^https?:\/\/(\d+)-(\d+)-(\d+)-(\d+)\./i.exec(uri);
+    if (!m) return /localhost|\/\/127(\.\d+){3}|\[::1\]/.test(uri) ? 'local' : 'remote';
+    const a = +m[1]; const b = +m[2];
+    return a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) ? 'local' : 'remote';
+  }
+  function fail(kind, message, extra) { const e = new Error(message || kind); e.kind = kind; return Object.assign(e, extra || {}); }
 
   function uuid() {
     if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
@@ -78,45 +98,72 @@
     clientId: '',
     timeoutMs: Math.max(1000, (cfg.requestTimeoutSeconds || 15) * 1000),
 
+    connected: false,
+    connType: '',
+    serverId: '',
+    serverName: '',
+    userName: '',
+    authMode: '',
+    accountToken: '',
+    viaLink: false,
+
     /** Resolve credentials. Order: launch URL > saved on device > config.js. */
     init() {
       const launch = readLaunchParams();
-      if (launch.token) store.set('plex.token', launch.token);
+      if (launch.token) {
+        if (launch.token !== store.get('plex.token')) {          // a new token: forget any earlier sign-in
+          ['plex.acct', 'plex.srv', 'plex.conns', 'plex.srvid', 'plex.srvname', 'plex.user'].forEach((k) => store.del(k));
+        }
+        store.set('plex.token', launch.token);
+        store.set('plex.auth', 'manual');
+        store.set('plex.viaLink', '1');
+      }
       if (launch.server) store.set('plex.server', launch.server.replace(/\/+$/, ''));
       this.token = store.get('plex.token') || cfg.token || '';
-      this.server = (store.get('plex.server') || cfg.serverUrl || '').replace(/\/+$/, '');
+      this.accountToken = store.get('plex.acct') || this.token;
+      const srv = readJson('plex.srv');
+      if (srv) this.token = srv.token || this.accountToken;        // signed in with a code: use the server's own token
+      this.authMode = store.get('plex.auth') || (this.token ? 'manual' : '');
+      // your own address in config.js is only a starting point for the "manual" set-up; a server chosen through Plex replaces it
+      this.server = (store.get('plex.server') || (srv ? '' : cfg.serverUrl) || '').replace(/\/+$/, '');
+      this.serverId = store.get('plex.srvid') || '';
+      this.serverName = store.get('plex.srvname') || '';
+      this.userName = store.get('plex.user') || '';
+      this.viaLink = store.get('plex.viaLink') === '1';
       this.clientId = store.get('plex.clientId') || uuid();
       store.set('plex.clientId', this.clientId);
-      return { ok: !!(this.token && this.server), missingToken: !this.token, missingServer: !this.server };
+      return { ok: this.hasCredentials() };
     },
+    hasCredentials() { return !!(this.token || this.accountToken); },
 
     /** Tiny key/value memory on the device (last letter chosen per library, etc.). */
     remember(k, v) { store.set('plex.pref.' + k, String(v)); },
     recall(k) { return store.get('plex.pref.' + k); },
 
-    identity() {
+    identityBase() {
       const chrome = (navigator.userAgent.match(/Chrome\/(\d+)/) || [])[1] || '120';
       return {
         'X-Plex-Product': 'Plex Glasses',
-        'X-Plex-Version': '5.0.0',
+        'X-Plex-Version': '6.0.0',
         'X-Plex-Client-Identifier': this.clientId,
         // "Chrome" makes the server apply its built-in Chrome client profile (H.264/AAC etc.).
         'X-Plex-Platform': 'Chrome',
         'X-Plex-Platform-Version': chrome,
         'X-Plex-Device': 'Meta Ray-Ban Display',
         'X-Plex-Device-Name': 'Ray-Ban Display',
-        'X-Plex-Token': this.token,
       };
     },
+    identity() { return Object.assign(this.identityBase(), { 'X-Plex-Token': this.token }); },
 
-    url(path, extra) {
-      const all = Object.assign({}, this.identity(), extra || {});
+    buildUrl(base, path, params) {
       const p = new URLSearchParams();
-      Object.keys(all).forEach((k) => {
-        if (all[k] !== undefined && all[k] !== null && all[k] !== '') p.append(k, all[k]);
+      Object.keys(params || {}).forEach((k) => {
+        if (params[k] !== undefined && params[k] !== null && params[k] !== '') p.append(k, params[k]);
       });
-      return this.server + path + '?' + p.toString();
+      return base + path + '?' + p.toString();
     },
+
+    url(path, extra) { return this.buildUrl(this.server, path, Object.assign({}, this.identity(), extra || {})); },
 
     /** GET JSON with a hard time limit covering the whole download, so nothing can hang forever. */
     async json(path, extra, ms) {
@@ -166,6 +213,233 @@
       return out;
     },
 
+    // ---------- sign in with a code (plex.tv/link) ----------
+    authBase() { return (cfg.authBase || 'https://plex.tv').replace(/\/+$/, ''); },
+    resourcesBase() { return (cfg.resourcesBase || 'https://clients.plex.tv').replace(/\/+$/, ''); },
+
+    /** A request to plex.tv (not to your server). Every value is in the query string so it stays a simple request. */
+    async tvJson(base, path, extra, opts) {
+      const o = opts || {};
+      const ctl = new AbortController();
+      const timer = setTimeout(() => ctl.abort(), o.ms || 10000);
+      try {
+        const params = Object.assign({}, this.identityBase(), o.token ? { 'X-Plex-Token': o.token } : {}, extra || {});
+        let res;
+        try {
+          res = await fetch(this.buildUrl(base, path, params), { method: o.method || 'GET', headers: { Accept: 'application/json' }, signal: ctl.signal });
+        } catch (cause) {
+          throw fail(cause && cause.name === 'AbortError' ? 'timeout' : 'network', 'plex.tv');
+        }
+        if (res.status === 401 || res.status === 403) throw fail('auth', 'auth');
+        if (!res.ok) throw fail('http', 'plex.tv said ' + res.status, { status: res.status });
+        try { return await res.json(); } catch (cause) { throw fail('http', 'plex.tv sent something unexpected'); }
+      } finally {
+        clearTimeout(timer);
+      }
+    },
+
+    /** Ask plex.tv for a short code. The user types it at plex.tv/link on their phone. */
+    async startPin() {
+      const d = await this.tvJson(this.authBase(), '/api/v2/pins', { strong: 'false' }, { method: 'POST' });
+      return { id: d.id, code: String(d.code || ''), expires: Date.now() + (+d.expiresIn || 900) * 1000 };
+    },
+    /** Has the code been entered yet? Returns the account token once it has, otherwise ''. */
+    async checkPin(pin) {
+      const d = await this.tvJson(this.authBase(), '/api/v2/pins/' + encodeURIComponent(pin.id), { code: pin.code });
+      return d.authToken || '';
+    },
+    async signedIn(token) {
+      store.set('plex.acct', token);
+      store.set('plex.auth', 'pin');
+      ['plex.token', 'plex.srv', 'plex.conns', 'plex.srvid', 'plex.srvname', 'plex.server', 'plex.viaLink'].forEach((k) => store.del(k));
+      this.accountToken = token; this.token = token; this.authMode = 'pin';
+      this.server = ''; this.serverId = ''; this.serverName = ''; this.viaLink = false; this.connected = false;
+      try {
+        const u = await this.tvJson(this.authBase(), '/api/v2/user', {}, { token, ms: 6000 });
+        this.userName = u.title || u.username || '';
+        if (this.userName) store.set('plex.user', this.userName);
+      } catch (e) { /* the name is only a nicety */ }
+    },
+    /** The old way: a token (and optionally an address) supplied by hand. */
+    setManual(server, token) {
+      ['plex.acct', 'plex.srv', 'plex.conns', 'plex.srvid', 'plex.srvname', 'plex.user'].forEach((k) => store.del(k));
+      store.set('plex.token', token);
+      store.set('plex.auth', 'manual');
+      if (server) store.set('plex.server', server.replace(/\/+$/, '')); else store.del('plex.server');
+      this.token = token; this.accountToken = token; this.authMode = 'manual';
+      this.server = (server || cfg.serverUrl || '').replace(/\/+$/, '');
+      this.serverId = ''; this.serverName = ''; this.userName = ''; this.connected = false;
+    },
+    signOut() {
+      ['plex.token', 'plex.acct', 'plex.auth', 'plex.server', 'plex.srv', 'plex.conns', 'plex.srvid', 'plex.srvname', 'plex.user', 'plex.viaLink'].forEach((k) => store.del(k));
+      try {
+        Object.keys(window.localStorage).filter((k) => k.indexOf('plex.idx.') === 0).forEach((k) => window.localStorage.removeItem(k));
+      } catch (e) { /* ignore */ }
+      this.token = ''; this.accountToken = ''; this.authMode = ''; this.server = (cfg.serverUrl || '').replace(/\/+$/, '');
+      this.serverId = ''; this.serverName = ''; this.userName = ''; this.viaLink = false; this.connected = false; this.connType = '';
+    },
+
+    // ---------- finding your server, at home or away ----------
+    /** The servers on this account, each with its addresses (home network, remote, relay), best first. */
+    async discoverServers() {
+      const extra = { includeHttps: 1, includeRelay: 1, includeIPv6: 1 };
+      let d;
+      try {
+        d = await this.tvJson(this.resourcesBase(), '/api/v2/resources', extra, { token: this.accountToken });
+      } catch (e) {
+        if (e.kind === 'auth') throw e;
+        d = await this.tvJson(this.authBase(), '/api/v2/resources', extra, { token: this.accountToken });
+      }
+      const arr = Array.isArray(d) ? d : ((d && d.MediaContainer && d.MediaContainer.Device) || []);
+      return arr
+        .filter((x) => String(x.provides || '').split(',').indexOf('server') >= 0)
+        .map((x) => ({
+          id: x.clientIdentifier,
+          name: x.name || 'Plex server',
+          owned: !!x.owned,
+          token: x.accessToken || '',
+          conns: (x.connections || [])
+            .filter((c) => c.uri && okUri(c.uri) && !c.IPv6)
+            .map((c) => ({ uri: String(c.uri).replace(/\/+$/, ''), type: c.relay ? 'relay' : c.local ? 'local' : 'remote' }))
+            .filter((c, i, all) => all.findIndex((o) => o.uri === c.uri) === i)
+            .sort((a, b) => PRI[a.type] - PRI[b.type]),
+        }));
+    },
+
+    useServer(srv) {
+      store.set('plex.srv', JSON.stringify({ id: srv.id, name: srv.name, token: srv.token }));
+      store.set('plex.conns', JSON.stringify(srv.conns));
+      store.set('plex.srvid', srv.id);
+      store.set('plex.srvname', srv.name);
+      this.serverId = srv.id; this.serverName = srv.name;
+      this.token = srv.token || this.accountToken;
+    },
+    /** The user picked a server from the list. */
+    chooseServer(srv) {
+      this.useServer(srv);
+      store.del('plex.server');
+      this.server = '';
+      this.connected = false;
+    },
+
+    knownCandidates() {
+      const out = [];
+      const cached = readJson('plex.conns') || [];
+      const add = (uri, type) => {
+        uri = String(uri || '').replace(/\/+$/, '');
+        if (uri && okUri(uri) && !out.some((c) => c.uri === uri)) out.push({ uri, type: type || guessType(uri) });
+      };
+      add(this.server, (cached.find((c) => c.uri === this.server) || {}).type);
+      cached.forEach((c) => add(c.uri, c.type));
+      return out.map((c, i) => ({ c, i })).sort((a, b) => PRI[a.c.type] - PRI[b.c.type] || a.i - b.i).map((x) => x.c);
+    },
+
+    /** Is this address really our server? (Asks for its public identity.) */
+    async checkAddress(c, expectedId) {
+      const ctl = new AbortController();
+      const timer = setTimeout(() => ctl.abort(), PROBE_MS[c.type] || 5000);
+      try {
+        const res = await fetch(this.buildUrl(c.uri, '/identity', this.identity()), { headers: { Accept: 'application/json' }, signal: ctl.signal });
+        if (!res.ok) return null;
+        const id = (((await res.json()).MediaContainer) || {}).machineIdentifier || '';
+        if (expectedId && id && id !== expectedId) return null;        // a different server answered
+        return Object.assign({}, c, { machineId: id });
+      } catch (e) {
+        return null;
+      } finally {
+        clearTimeout(timer);
+      }
+    },
+
+    /**
+     * Try all the addresses, home network first. The slower options start a moment later, so at home the
+     * answer is instant and away from home we don't sit through a long wait on an address that can't work.
+     * If a better address is still being tried when a worse one answers, we give it a short grace period.
+     */
+    race(cands, expectedId, say) {
+      if (!cands.length) return Promise.resolve(null);
+      return new Promise((resolve) => {
+        const sorted = cands.slice().sort((a, b) => PRI[a.type] - PRI[b.type]);
+        const state = sorted.map(() => 'wait');
+        const found = {};
+        let done = false;
+        let grace = 0;
+        const finish = (hit) => { if (done) return; done = true; clearTimeout(grace); resolve(hit); };
+        const evaluate = () => {
+          if (done) return;
+          const best = state.indexOf('ok');
+          if (best >= 0) {
+            const higherPending = state.some((st, j) => j < best && (st === 'wait' || st === 'run'));
+            if (!higherPending) { finish(found[best]); return; }
+            if (!grace) grace = setTimeout(() => finish(found[state.indexOf('ok')]), 350);
+            return;
+          }
+          if (state.every((st) => st === 'fail')) finish(null);
+        };
+        sorted.forEach((c, i) => {
+          setTimeout(() => {
+            if (done) return;
+            state[i] = 'run';
+            if (say) say('Trying ' + TYPE_LABEL[c.type] + '\u2026');
+            this.checkAddress(c, expectedId).then((hit) => { if (hit) { state[i] = 'ok'; found[i] = hit; } else state[i] = 'fail'; evaluate(); });
+          }, DELAY[c.type] || 0);
+        });
+      });
+    },
+
+    adopt(hit) {
+      this.server = hit.uri;
+      this.connType = hit.type;
+      this.connected = true;
+      if (hit.machineId) { this.serverId = hit.machineId; store.set('plex.srvid', hit.machineId); }
+      store.set('plex.server', hit.uri);
+    },
+
+    /** Keep the list of addresses fresh for next time (home, remote and relay can change). Never blocks anything. */
+    refreshServers() {
+      if (!this.accountToken) return;
+      this.discoverServers().then((list) => {
+        const s = list.find((x) => x.id === this.serverId);
+        if (!s) return;
+        store.set('plex.conns', JSON.stringify(s.conns));
+        if (s.name) { this.serverName = s.name; store.set('plex.srvname', s.name); }
+        if (this.authMode === 'pin' && s.token) store.set('plex.srv', JSON.stringify({ id: s.id, name: s.name, token: s.token }));
+      }).catch(() => {});
+    },
+
+    /**
+     * Get connected. Uses the last address that worked (and any others we know), and only if none of those answer
+     * asks plex.tv where the server is now. Throws kind: unreachable | noserver | choose (several servers) | auth.
+     */
+    async connect(onStatus) {
+      const say = (t) => { if (onStatus) onStatus(t); };
+      this.connected = false;
+      this.connType = '';
+      const srv = readJson('plex.srv');
+      const wantId = (srv && srv.id) || this.serverId || '';
+      const known = this.knownCandidates();
+      if (known.length) {
+        say('Connecting\u2026');
+        const hit = await this.race(known, wantId, say);
+        if (hit) { this.adopt(hit); this.refreshServers(); return hit; }
+      }
+      if (!this.accountToken) throw fail('unreachable', 'unreachable', { tried: known.map((c) => c.type) });
+
+      say('Looking for your server\u2026');
+      const servers = await this.discoverServers();
+      let chosen = wantId ? servers.find((x) => x.id === wantId) : null;
+      if (!chosen) {
+        if (servers.length === 1) chosen = servers[0];
+        else if (!servers.length) throw fail('noserver', 'noserver');
+        else throw fail('choose', 'choose', { servers });
+      }
+      this.useServer(chosen);
+      const hit = await this.race(chosen.conns, chosen.id, say);
+      if (!hit) throw fail('unreachable', 'unreachable', { tried: chosen.conns.map((c) => c.type) });
+      this.adopt(hit);
+      return hit;
+    },
+
     // ---------- browsing ----------
     async libraries() {
       const mc = await this.json('/library/sections');
@@ -195,7 +469,7 @@
       const head = await page(0, 0);
       const total = typeof head.totalSize === 'number' ? head.totalSize : null;
 
-      const ck = 'plex.idx.' + this.server + '|' + id;
+      const ck = 'plex.idx.' + (this.serverId || this.server) + '|' + id;
       if (total !== null) {
         const hit = this.readIndexCache(ck, total, stamp);
         if (hit) return { rows: hit, total, skipped: 0, cached: true };

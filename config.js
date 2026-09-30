@@ -9,8 +9,9 @@
  * The app stores it on the device and strips it from the address bar. See README.
  */
 window.PLEX_CONFIG = {
-  // Your Plex Media Server. plex.direct hostnames carry a valid HTTPS certificate,
-  // which the glasses need (HTTPS pages can't call plain-HTTP servers).
+  // OPTIONAL starting address for your Plex Media Server (plex.direct hostnames carry a valid HTTPS
+  // certificate, which the glasses need). If it stops working (for example you're away from home) the app asks
+  // plex.tv where your server is now, so you can leave this as "" and just sign in with a code.
   // Can be overridden per launch with  #server=https%3A%2F%2F...
   serverUrl: "https://192-168-4-116.57fb472612144afbb22b40dfe4cfb2e9.plex.direct:32400",
 
@@ -34,6 +35,8 @@ window.PLEX_CONFIG = {
     seekStepSeconds: 15,
     controlsHideMs: 6000,        // playback controls auto-hide after this long while playing
     startTimeoutSeconds: 45,     // give up on one method (and try the next) if no picture by then
+    relayResolution: "426x240",  // when connected through Plex's relay (slow) start at this size...
+    relayBitrate: 400,           // ...and this bitrate (kbps)
     autoLowerQuality: true,      // if playback keeps stalling, step down to a lighter stream automatically
     rebufferSeconds: 10,         // after a stall, wait until this many seconds are stored up before resuming
     rebufferMaxSeconds: 25,      // ...but never wait longer than this

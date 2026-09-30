@@ -1,4 +1,4 @@
-# Plex for Meta Ray-Ban Display (v5)
+# Plex for Meta Ray-Ban Display (v6)
 
 A Plex client web app for the Meta Ray-Ban Display glasses. Libraries, list views, movie splash
 screens, season/episode browsing, and a fullscreen player. The Plex server does the
@@ -20,9 +20,12 @@ which ones were left out.
 - A small **Back** button sits at the top left of every screen. Move **Up** past the first row or **Left**
   past the list edge to select it. It runs `history.back()`, exactly like the glasses' own Back gesture.
 - **Big libraries:** a library with more than 80 titles shows a strip of letters (`# A B C ... Z`) above the
-  list. Move **Up** from the first row to reach the strip, **Right/Left** to pick a letter, **Select** to
-  show those titles. Each letter shows 100 titles at a time; choose **Show more** at the end for the next 100.
-  Going Back from a title returns you to the same letter and row.
+  list. Each letter shows 100 titles at a time; choose **Show more** at the end for the next 100. Going Back from a
+  title returns you to the same letter and row.
+  - **Right** from anywhere in the list moves to the **next letter**, and **Left** to the **previous** one. The list
+    switches to that letter and the cursor lands on it in the strip (press **Down** to go into the list). You can keep
+    pressing Right/Left while on the strip to flick through letters. On the first letter, Left goes to the Back button.
+  - **Up** from the first title also reaches the strip, and **Select** on a letter jumps to it.
 - In the player, a small **Controls** pill sits at the bottom of the picture. It shows its label for a few seconds and
   then shrinks to three faint dots (it has to stay on screen, because the glasses need something visible to select). **Select** opens: **-15s / Play-Pause /
   +15s / Exit**. (If nothing has focus, any Select or arrow press opens them too.) Exit goes back to the movie's
@@ -60,31 +63,35 @@ folders, and commit. Files with the same names are replaced. You don't need to t
 GitHub Pages takes a minute or two to publish. Then on the glasses use the middle tap for the Web App menu and
 choose **Restart**. The bottom of the Libraries screen shows the version you're running.
 
-### 2. Your server address
+### 2. Sign in (nothing secret goes in the repo)
 
-It's already set in `config.js` (`serverUrl`). It is not a secret. Note that a `192.168.x.x` plex.direct
-address only works while the glasses' connection can reach your home network (see "Away from home").
+Everything on GitHub Pages is public, so **never commit your token**. There are two ways to sign in; the first
+needs no typing on the glasses and works at home or away.
 
-### 3. Your Plex token (kept out of the repo)
+**A. Sign in with a code (recommended).** Connect the app using the plain address
+`https://<you>.github.io/<repo>/` (no token). The first time it opens, the glasses show a short code and
+`plex.tv/link`. On your phone or computer go to plex.tv/link, sign in if asked, and enter the code. The glasses carry
+on by themselves, find your server through your Plex account, and remember everything for next time.
 
-Everything on GitHub Pages is public, so **never commit your token**. Instead put it on the launch URL, once:
+**B. A launch link with your token (the original way).** Put the token on the launch URL, once:
 
 ```
 https://<you>.github.io/<repo>/#token=YOUR_PLEX_TOKEN
 ```
 
-On first load the app saves the token on the device and removes it from the address bar. If your server
-address ever changes, you can override it the same way: `#token=...&server=https%3A%2F%2F...`.
-If the Meta AI app's URL field drops everything after `#`, use `?token=YOUR_PLEX_TOKEN` instead.
+On first load the app saves the token on the device and removes it from the address bar. You can also set the
+server's address the same way: `#token=...&server=https%3A%2F%2F...`. If the Meta AI app's URL field drops everything
+after `#`, use `?token=YOUR_PLEX_TOKEN` instead. Find your token: in Plex Web open any item, **... > Get Info > View
+XML**, and copy `X-Plex-Token=` from the address bar. To revoke a token, remove the device under plex.tv > Account >
+Authorized Devices. (On the sign-in screen, **Use a token instead** lets you type a token and address by hand.)
 
-Find your token: in Plex Web open any item, **... > Get Info > View XML**, and copy `X-Plex-Token=` from
-the address bar. To revoke a token, remove the device under plex.tv > Account > Authorized Devices.
+`serverUrl` in `config.js` is an optional starting address. Leave it as `""` for a copy you share with other people.
 
-### 4. Add it to the glasses
+### 3. Add it to the glasses
 
 1. Meta AI app: **Settings > App Info**, tap the version number five times, **Enable** Developer Mode.
    (Needs glasses software v125+ and Meta AI app v272+.)
-2. **App Settings > Apps > Web Apps > Connect Web App**, paste the launch URL from step 3, **Save**.
+2. **App Settings > Apps > Web Apps > Connect Web App**, paste your URL from step 2, **Save**.
 3. Plex appears at the bottom of the glasses' app grid. Pin it if you like.
 
 Use the middle tap for the Web App menu (**Restart / Resume / Permissions**).
@@ -163,7 +170,7 @@ Watch the stats line under the progress bar (open the controls). A few things it
 
 ## Diagnostics
 
-At the bottom of the Libraries screen is a small **Diagnostics** button. It shows the app and browser versions, whether
+In **Settings > Diagnostics** (Settings is at the bottom of the Libraries screen) you'll find a page that shows the app and browser versions, whether
 the browser can play HLS natively, and a log of what the app did. The log is kept on the glasses, so after a problem
 (even a freeze that needed a Restart) you can open Diagnostics and read **Last session** to see what happened just
 before. During playback it records a line every 10 seconds (position, buffer, stalls), so the last line shows when
@@ -189,11 +196,30 @@ says "start fixed (was Ns)". Your own -15s / +15s presses are never overridden.
 in the spirit of Plex's own arrow. It isn't Plex's official artwork. If you publish this widely, check Plex's brand
 guidelines about using the name and logo in an unofficial app; you may want a different name and mark.
 
-## Away from home
+## Watching away from home
 
-`192-168-4-116...plex.direct` resolves to a private address, so it works only when the glasses (through the
-phone) are on your home network. To use it elsewhere, turn on **Remote Access** in Plex, then relaunch with
-`#server=` set to the public plex.direct address Plex shows for your server (`https://<ip-with-dashes>.<id>.plex.direct:<port>`).
+Every time it opens the app works out the best way to reach your server, in this order:
+1. **Your home network** (fast). Tried first, so at home it is instant.
+2. **A remote connection**: your server's public address. This needs **Remote Access** turned on in Plex (Settings >
+   Remote Access) so the server can be reached from outside your home.
+3. **Plex's relay**: a slower route Plex provides when the direct remote route isn't available. It is limited in
+   bandwidth, so when the app is connected this way it starts at a lighter quality (`relayResolution` /
+   `relayBitrate` in `config.js`).
+
+It gets the addresses from your Plex account, so you never type one. The Libraries screen says how it connected
+("Connected via your home network / a remote connection / Plex relay"), and **Settings** shows the same.
+If none of them answer you get a clear message listing what was tried, with Try again and Settings buttons.
+
+Plex has its own rules about remote streaming (for example some of its apps need a Plex Pass or Remote Watch Pass).
+Whether they apply to a custom app like this one isn't something this project can check, so test remote playback
+on your own account.
+
+## Settings
+
+At the bottom of the Libraries screen. It shows who is signed in, which server, and how you're connected, and has:
+**Change server** (when your account has more than one), **Reconnect** (test the connection again), **Diagnostics**,
+and **Sign out** (select twice to confirm). If you open the app from a launch link that contains a token, it signs in
+again on the next start; edit the link in the Meta AI app to remove the `#token` part if you want sign-out to stick.
 
 ## Desktop testing
 
@@ -205,7 +231,7 @@ Install Chrome's **Meta Ray-Ban Display Simulator** extension, open the site, an
 ```
 index.html                                page shell
 config.js                                 server address, libraries, transcode settings (no secrets)
-js/plex.js                                Plex API, library loading and cache, Universal Transcoder URLs
+js/plex.js                                Plex API, sign-in by code, finding the server, library loading and cache, Universal Transcoder URLs
 js/app.js                                 screens, navigation, A-Z strip, player and fallbacks
 js/vendor/hls.min.js                      optional: your own copy of hls.js (see above)
 css/style.css                             theme
