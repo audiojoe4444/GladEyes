@@ -17,14 +17,21 @@ window.PLEX_CONFIG = {
   // Only these libraries are shown, in this order (matched by name, case-insensitive).
   libraries: ["Movies", "TV Shows", "Cartoons"],
 
+  // How long to wait for the server before giving up on a request (seconds).
+  requestTimeoutSeconds: 15,
+
   // How the Plex server transcodes for the glasses (Universal Transcoder).
   playback: {
-    protocol: "http",            // "http" = one progressive stream (MP4)   |  "hls" = m3u8 playlist
-    container: "mp4",            // used when protocol is "http"
+    // "auto" tries, in order: HLS in the browser -> HLS via hls.js -> progressive MP4,
+    // moving on by itself if one fails.  Or force one family:  "hls"  |  "mp4"
+    strategy: "auto",
+    container: "mp4",            // container for the progressive MP4 fallback
     videoResolution: "854x480",  // the display is 600x600, so 480p is plenty and light on bandwidth
     maxVideoBitrate: 2000,       // kbps
     forceTranscode: true,        // true = server always re-encodes to H.264 + AAC stereo (never direct-streams the video)
     seekStepSeconds: 15,
-    controlsHideMs: 6000         // playback controls auto-hide after this long while playing
+    controlsHideMs: 6000,        // playback controls auto-hide after this long while playing
+    startTimeoutSeconds: 45,     // give up on one method (and try the next) if no picture by then
+    hlsJsUrl: ""                 // optional: your own hls.js URL. Empty = js/vendor/hls.min.js, then a public CDN
   }
 };

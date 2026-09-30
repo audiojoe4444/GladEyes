@@ -14,13 +14,16 @@
 (function () {
   'use strict';
 
+  const VERSION = '2';
   const cfg = window.PLEX_CONFIG || {};
   const pb = Object.assign({
-    protocol: 'http', container: 'mp4', videoResolution: '854x480', maxVideoBitrate: 2000,
-    forceTranscode: true, seekStepSeconds: 15, controlsHideMs: 6000,
+    strategy: 'auto', container: 'mp4', videoResolution: '854x480', maxVideoBitrate: 2000,
+    forceTranscode: true, seekStepSeconds: 15, controlsHideMs: 6000, startTimeoutSeconds: 45, hlsJsUrl: '',
   }, cfg.playback || {});
   const STEP = pb.seekStepSeconds;
-  const MAX_INDEX = 4; // host keeps at most 5 history entries (indexes 0..4)
+  const MAX_INDEX = 4;     // host keeps at most 5 history entries (indexes 0..4)
+  const FLAT_MAX = 80;     // libraries this small are one plain list; bigger ones get the A-Z strip
+  const PAGE = 100;        // rows drawn at a time inside one letter
 
   // ---------- helpers ----------
   const $ = (sel, root) => (root || document).querySelector(sel);
@@ -62,9 +65,11 @@
     const m = Math.round((ms || 0) / 60000);
     return m >= 60 ? Math.floor(m / 60) + 'h ' + (m % 60) + 'm' : m + 'm';
   };
+  const num = (n) => Number(n).toLocaleString();
 
   const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
-  const sortKey = (it) => String(it.titleSort || it.title || '').trim();
+  const rowKey = (r) => String(r.s || r.t || '').trim();
+  const rowCmp = (a, b) => collator.compare(rowKey(a), rowKey(b));
 
   // ---------- elements ----------
   const screenEl = $('#screen');
@@ -75,6 +80,7 @@
   const video = $('#video');
   const surface = $('#surface');
   const loadingEl = $('#loading');
+  const loadMsg = $('#loadmsg');
   const ctrl = $('#ctrl');
   const perr = $('#perr');
   const perrMsg = $('#perr-msg');
@@ -95,6 +101,7 @@
   let renderSeq = 0;
   let creds = { ok: false };
   const focusMemory = new Map();
+  const lastLetter = new Map();
   const cache = { libs: null, items: new Map(), meta: new Map(), kids: new Map() };
 
   function cached(map, key, load) {
@@ -124,13 +131,6 @@
   backBtn.addEventListener('click', () => history.back());
 
   // ---------- focus ----------
-  function rememberFocus() {
-    const a = document.activeElement;
-    if (current && a && a.dataset && a.dataset.key && screenEl.contains(a)) {
-      focusMemory.set(stateKey(current), a.dataset.key);
-    }
-  }
-
   // Track the last-focused row as it changes, so moving to Back and pressing Down returns to it.
   screenEl.addEventListener('focusin', (e) => {
     const t = e.target;
@@ -187,8 +187,28 @@
       if (e.key === 'ArrowDown') { e.preventDefault(); focusPrimary(); }
       return;
     }
+    if (!a || !scopeEl().contains(a)) return;
+
+    // Library screen with the A-Z strip: strip sits between Back and the list.
+    const strip = screenEl.hidden ? null : $('#letters', screenEl);
+    if (strip) {
+      if (e.key === 'ArrowDown' && a.classList.contains('chip')) {
+        const first = $('#rows .item', screenEl);
+        if (first) { e.preventDefault(); first.focus(); }
+        return;
+      }
+      if (e.key === 'ArrowUp' && a.classList.contains('item')) {
+        const li = a.closest('li');
+        if (li && li.previousElementSibling === null) {
+          e.preventDefault();
+          ($('[aria-current="true"]', strip) || strip.firstElementChild).focus();
+          return;
+        }
+      }
+    }
+
     if (e.key !== 'ArrowLeft' && e.key !== 'ArrowUp') return;
-    if (!a || !scopeEl().contains(a) || !isEdge(a, e.key)) return;
+    if (!isEdge(a, e.key)) return;
     e.preventDefault();
     backBtn.focus();
   });
@@ -240,15 +260,19 @@
     if (e && e.kind === 'setup') {
       title = 'One-time setup needed';
       msg = 'This app needs your Plex token.';
-      detail = 'Open the app once from your launch link, which ends in #token=YOUR_TOKEN (README, step 4).';
+      detail = 'Open the app once from your launch link, which ends in #token=YOUR_TOKEN (README, step 3).';
     } else if (e && e.kind === 'auth') {
       title = 'Plex rejected the token';
       msg = 'The saved token is no longer valid.';
-      detail = 'Open the app from a fresh launch link with a new #token=\u2026 (README, step 4).';
+      detail = 'Open the app from a fresh launch link with a new #token=\u2026 (README, step 3).';
     } else if (e && e.kind === 'network') {
       title = 'Can\u2019t reach your Plex server';
       msg = 'Server: ' + host;
       detail = 'The glasses (via your phone) must be able to reach that address, and the server must allow browser requests (CORS). A 192.168.x.x address only works on your home network.';
+    } else if (e && e.kind === 'timeout') {
+      title = 'Your Plex server isn\u2019t answering';
+      msg = 'Server: ' + host;
+      detail = 'It took too long to reply. Check the server is awake and the connection is good, then try again.';
     } else if (e && e.kind === 'libs') {
       title = 'Libraries not found';
       msg = 'None of ' + (cfg.libraries || []).join(', ') + ' exist on this server.';
@@ -262,7 +286,6 @@
 
   // ---------- render ----------
   async function render(state) {
-    rememberFocus();
     const prev = current;
     current = state;
     const seq = ++renderSeq;
@@ -295,8 +318,7 @@
     setTitle('Libraries');
     if (!creds.ok) throw failure('setup');
     showLoading();
-    if (!cache.libs) cache.libs = Plex.libraries().catch((e) => { cache.libs = null; throw e; });
-    const libs = await cache.libs;
+    const libs = await getLibraries();
     if (seq !== renderSeq) return;
 
     const byName = new Map(libs.map((l) => [l.title.trim().toLowerCase(), l]));
@@ -314,35 +336,172 @@
       onSelect: () => navigate({ screen: 'library', lib: l.id, title: l.title }),
     })));
     if (missing.length) screenEl.append(h('p', { class: 'note' }, 'Not found on server: ' + missing.join(', ')));
+    screenEl.append(h('p', { class: 'note note-ver' }, 'Plex Glasses v' + VERSION));
     focusInitial();
   }
 
+  function getLibraries() {
+    if (!cache.libs) cache.libs = Plex.libraries().catch((e) => { cache.libs = null; throw e; });
+    return cache.libs;
+  }
+
   // ---------- screen: a library's items, alphabetical ----------
-  function openItem(it) {
-    if (it.type === 'movie') navigate({ screen: 'movie', id: it.ratingKey, title: it.title });
-    else if (it.type === 'show') navigate({ screen: 'show', id: it.ratingKey, title: it.title });
-    else if (it.type === 'season') navigate({ screen: 'season', id: it.ratingKey, title: it.title });
-    else navigate({ screen: 'player', id: it.ratingKey, kind: it.type });
+  function openRow(r) {
+    if (r.ty === 'movie') navigate({ screen: 'movie', id: r.k, title: r.t });
+    else if (r.ty === 'show') navigate({ screen: 'show', id: r.k, title: r.t });
+    else if (r.ty === 'season') navigate({ screen: 'season', id: r.k, title: r.t });
+    else navigate({ screen: 'player', id: r.k, kind: r.ty });
+  }
+
+  function rowOpts(r) {
+    return {
+      key: 'it:' + r.k,
+      label: r.t,
+      sub: r.ty === 'show' && r.c ? r.c + (r.c === 1 ? ' season' : ' seasons') : (r.y || ''),
+      onSelect: () => openRow(r),
+    };
+  }
+
+  /** First letter used for the A-Z strip: sort title, accents removed, anything not A-Z goes under "#". */
+  function bucketOf(r) {
+    const c = rowKey(r).normalize('NFD').replace(/[\u0300-\u036f]/g, '').charAt(0).toUpperCase();
+    return /[A-Z]/.test(c) ? c : '#';
+  }
+
+  function makeIndex(res) {
+    const buckets = new Map();
+    res.rows.forEach((r) => {
+      const L = bucketOf(r);
+      if (!buckets.has(L)) buckets.set(L, []);
+      buckets.get(L).push(r);
+    });
+    const letters = Array.from(buckets.keys()).sort((a, b) => (a === '#' ? -1 : b === '#' ? 1 : a < b ? -1 : 1));
+    const memo = new Map();
+    return {
+      rows: res.rows, total: res.total, skipped: res.skipped, buckets, letters,
+      sorted(L) {
+        if (!memo.has(L)) memo.set(L, buckets.get(L).slice().sort(rowCmp));
+        return memo.get(L);
+      },
+    };
+  }
+
+  async function libraryStamp(id) {
+    try {
+      const l = (await getLibraries()).find((x) => x.id === id);
+      return l ? l.stamp : '';
+    } catch (e) { return ''; }
   }
 
   async function showLibrary(state, seq) {
     setTitle(state.title);
     showLoading('Loading ' + state.title + '\u2026');
-    const items = await cached(cache.items, state.lib, () => Plex.libraryItems(state.lib, (n, total) => {
-      const t = $('#loadtext');
-      if (t && seq === renderSeq) t.textContent = 'Loading ' + state.title + '\u2026 ' + n + (isFinite(total) ? ' / ' + total : '');
-    }));
+    const idx = await cached(cache.items, state.lib, async () => {
+      const stamp = await libraryStamp(state.lib);
+      const res = await Plex.libraryIndex(state.lib, stamp, (n, total, note) => {
+        const t = $('#loadtext');
+        if (t && seq === renderSeq) {
+          t.textContent = 'Loading ' + state.title + '\u2026 ' + num(n) + (total ? ' / ' + num(total) : '') + (note ? ' (' + note + ')' : '');
+        }
+      });
+      return makeIndex(res);
+    });
     if (seq !== renderSeq) return;
-    const sorted = items.slice().sort((a, b) => collator.compare(sortKey(a), sortKey(b)));
-    showList(sorted.map((it) => ({
-      key: 'it:' + it.ratingKey,
-      label: it.title,
-      sub: it.type === 'show'
-        ? (it.childCount ? it.childCount + (it.childCount === 1 ? ' season' : ' seasons') : it.year)
-        : it.year,
-      onSelect: () => openItem(it),
-    })), 'This library is empty.');
+    setTitle(state.title + ' \u00B7 ' + num(idx.total));
+
+    if (!idx.rows.length) {
+      screenEl.replaceChildren(h('div', { class: 'status' }, 'This library is empty.'));
+      return;
+    }
+
+    if (idx.rows.length <= FLAT_MAX) {
+      showList(idx.rows.slice().sort(rowCmp).map(rowOpts));
+    } else {
+      renderLetters(state, idx);
+    }
+    if (idx.skipped) {
+      screenEl.append(h('p', { class: 'note' }, num(idx.skipped) + ' titles couldn\u2019t be loaded (the server didn\u2019t answer). Close and reopen to try again.'));
+    }
     focusInitial();
+  }
+
+  function renderLetters(state, idx) {
+    const remembered = lastLetter.get(state.lib);
+    const letter = idx.buckets.has(state.letter) ? state.letter
+      : idx.buckets.has(remembered) ? remembered : idx.letters[0];
+    const rowsHost = h('div', { id: 'rows', class: 'rows' });
+    const strip = h('nav', { id: 'letters', class: 'letters', 'aria-label': 'Jump to letter' });
+    idx.letters.forEach((L) => {
+      const n = idx.buckets.get(L).length;
+      const b = h('button', {
+        class: 'chip', type: 'button', 'data-key': 'ch:' + L,
+        'aria-label': (L === '#' ? 'Numbers and symbols' : L) + ', ' + n + ' titles',
+        'aria-current': L === letter ? 'true' : false,
+      }, L);
+      b.addEventListener('click', () => pickLetter(state, idx, strip, rowsHost, L));
+      strip.append(b);
+    });
+    screenEl.replaceChildren(h('div', { class: 'lib' }, strip, rowsHost));
+    screenEl.scrollTop = 0;
+
+    // Coming back from a title: draw enough rows to include the one that was selected.
+    const sorted = idx.sorted(letter);
+    const remKey = focusMemory.get(stateKey(state));
+    let limit = PAGE;
+    if (remKey && remKey.indexOf('it:') === 0) {
+      const i = sorted.findIndex((r) => 'it:' + r.k === remKey);
+      if (i >= 0) limit = Math.ceil((i + 1) / PAGE) * PAGE;
+    }
+    fillRows(rowsHost, sorted, limit);
+  }
+
+  function pickLetter(state, idx, strip, rowsHost, L) {
+    lastLetter.set(state.lib, L);
+    state.letter = L;
+    history.replaceState(state, '');           // Back from a title returns to this letter
+    Array.prototype.forEach.call(strip.children, (c) => {
+      if (c.dataset.key === 'ch:' + L) c.setAttribute('aria-current', 'true'); else c.removeAttribute('aria-current');
+    });
+    fillRows(rowsHost, idx.sorted(L), PAGE);
+    screenEl.scrollTop = 0;
+    const first = $('.item', rowsHost);
+    if (first) first.focus();
+  }
+
+  /** Draw a letter's titles, PAGE at a time, with a "Show more" row at the end. */
+  function fillRows(host, sorted, limit) {
+    const ul = h('ul', { class: 'list' });
+    let shown = 0;
+    let moreLi = null;
+
+    const addRows = (n) => {
+      const first = shown;
+      const end = Math.min(sorted.length, shown + n);
+      const frag = document.createDocumentFragment();
+      for (let i = shown; i < end; i++) frag.append(h('li', {}, makeItem(rowOpts(sorted[i]))));
+      shown = end;
+      if (moreLi) ul.insertBefore(frag, moreLi); else ul.append(frag);
+      const left = sorted.length - shown;
+      if (!left) {
+        if (moreLi) { moreLi.remove(); moreLi = null; }
+      } else if (!moreLi) {
+        moreLi = h('li', {}, makeItem({
+          key: 'more', label: 'Show more', sub: num(left) + ' more',
+          onSelect: () => {
+            const from = addRows(PAGE);
+            const li = ul.children[from];
+            if (li) $('.item', li).focus();
+          },
+        }));
+        ul.append(moreLi);
+      } else {
+        $('.item-sub', moreLi).textContent = num(left) + ' more';
+      }
+      return first;
+    };
+
+    addRows(limit);
+    host.replaceChildren(ul);
   }
 
   // ---------- screen: movie splash ----------
@@ -406,10 +565,24 @@
 
   // =====================================================================
   //  Player
+  //
+  //  The server always does the transcoding. What differs is how the glasses' browser
+  //  receives it, so we try these in order and fall back automatically:
+  //    1. "hls-native": the browser plays Plex's HLS playlist itself (if it says it can)
+  //    2. "hls-js":     the hls.js library plays the same HLS stream through the browser's
+  //                     Media Source API (loaded from js/vendor/ or a CDN on first use)
+  //    3. "mp4":        one progressive MP4 stream (seeking restarts it at a new offset)
+  //  If all fail, the screen says what each attempt did and what the server replied.
   // =====================================================================
-  const P = { item: null, session: '', offset: 0, base: 0, baseSet: false, dur: 0, streamSeq: 0, pending: null, hideTimer: 0, tick: 0, decisionText: '' };
+  const P = {
+    item: null, session: '', mode: '', ladder: [], idx: 0, errors: [], resume: 0,
+    offset: 0, base: 0, baseSet: false, dur: 0, streamSeq: 0, pending: null, started: false,
+    hideTimer: 0, tick: 0, watchdog: 0, hls: null, decisionText: '',
+  };
+  const MODE_NAME = { 'hls-native': 'HLS', 'hls-js': 'HLS (hls.js)', mp4: 'MP4' };
 
   const uuid = () => (window.crypto && crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2));
+  const pbFor = (protocol) => Object.assign({}, pb, { protocol });
 
   function fullTitle(it) {
     if (it.type === 'episode') {
@@ -420,10 +593,44 @@
     return it.title;
   }
 
-  function setLoading(on) { loadingEl.hidden = !on; }
+  function buildLadder() {
+    const ladder = [];
+    const nativeHls = !!(video.canPlayType('application/vnd.apple.mpegurl') || video.canPlayType('application/x-mpegURL'));
+    const mse = !!(window.MediaSource || window.ManagedMediaSource);
+    if (pb.strategy !== 'mp4') {
+      if (nativeHls) ladder.push('hls-native');
+      if (mse) ladder.push('hls-js');
+    }
+    if (pb.strategy !== 'hls') ladder.push('mp4');
+    if (!ladder.length) ladder.push('hls-native');
+    return ladder;
+  }
+
+  let hlsLoad = null;
+  /** Load hls.js on first use: your own copy in js/vendor/ if present, otherwise a pinned CDN build. */
+  function loadHlsJs() {
+    if (window.Hls) return Promise.resolve();
+    if (hlsLoad) return hlsLoad;
+    const urls = pb.hlsJsUrl ? [pb.hlsJsUrl] : ['js/vendor/hls.min.js', 'https://cdn.jsdelivr.net/npm/hls.js@1.5/dist/hls.min.js'];
+    const attempt = (i) => new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = urls[i];
+      s.async = true;
+      s.onload = () => (window.Hls ? resolve() : reject(new Error('missing')));
+      s.onerror = () => reject(new Error('failed'));
+      document.head.append(s);
+    }).catch((e) => (i + 1 < urls.length ? attempt(i + 1) : Promise.reject(e)));
+    hlsLoad = attempt(0).catch((e) => { hlsLoad = null; throw e; });
+    return hlsLoad;
+  }
+
+  function setLoading(on, text) {
+    loadingEl.hidden = !on;
+    if (on) loadMsg.textContent = text || 'Loading\u2026';
+  }
   function setPlayLabel(paused) { bPlay.replaceChildren(icon(paused ? 'play' : 'pause'), paused ? 'Play' : 'Pause'); }
 
-  const position = () => P.offset + Math.max(0, video.currentTime - P.base);
+  const position = () => (P.mode === 'mp4' ? P.offset + Math.max(0, video.currentTime - P.base) : video.currentTime || 0);
 
   function updateProgress() {
     if (ctrl.hidden) return;
@@ -473,36 +680,133 @@
 
     P.item = item;
     P.session = uuid();
-    P.offset = 0; P.base = 0; P.baseSet = false;
-    P.dur = (item.duration || 0) / 1000;
+    P.errors = [];
+    P.ladder = buildLadder();
+    P.idx = 0;
     P.pending = null;
     P.streamSeq = 0;
+    P.dur = (item.duration || 0) / 1000;
+    P.decisionText = '';
     ptitle.textContent = fullTitle(item);
     clearInterval(P.tick);
     P.tick = setInterval(heartbeat, 10000);
-    startStream(0, true);
+
+    // Diagnostics only: doesn't hold up playback.
+    const session = P.session;
+    Plex.decision(item, { offset: 0, session, pb: pbFor(P.ladder[0] === 'mp4' ? 'http' : 'hls') }).then((d) => {
+      if (P.session === session && d && d.text) P.decisionText = d.text;
+    });
+
+    begin(0);
   }
 
-  /** (Re)start the server-side transcode at `offset` seconds and point the <video> at it. */
-  async function startStream(offset, withDecision) {
+  function armWatchdog(my) {
+    clearTimeout(P.watchdog);
+    P.watchdog = setTimeout(() => {
+      if (my === P.streamSeq && !P.started) failMode('no video after ' + pb.startTimeoutSeconds + 's');
+    }, pb.startTimeoutSeconds * 1000);
+  }
+
+  function teardownEngine() {
+    clearTimeout(P.watchdog);
+    if (P.hls) { try { P.hls.destroy(); } catch (e) { /* ignore */ } P.hls = null; }
+  }
+
+  function playSafe() {
+    const p = video.play();
+    if (p && p.catch) {
+      p.catch((e) => { if (e && e.name === 'NotAllowedError') { setLoading(false); showControls(); } });
+    }
+  }
+
+  /** Start (or restart) playback with the current rung of the ladder, from `pos` seconds. */
+  function begin(pos) {
     const my = ++P.streamSeq;
-    P.offset = Math.max(0, Math.floor(offset));
-    P.base = 0;
-    P.baseSet = false;
-    setLoading(true);
-    const args = { offset: P.offset, session: P.session, pb };
-    if (withDecision) {
-      const d = await Plex.decision(P.item, args);
-      if (my !== P.streamSeq || !P.item) return;
-      P.decisionText = d && d.text ? d.text : '';
+    teardownEngine();
+    const mode = P.ladder[P.idx];
+    P.mode = mode;
+    P.started = false;
+    setLoading(true, P.idx > 0 ? 'Trying another way (' + MODE_NAME[mode] + ')\u2026' : 'Loading\u2026');
+    armWatchdog(my);
+
+    if (mode === 'mp4') {
+      P.offset = Math.max(0, Math.floor(pos));
+      P.base = 0;
+      P.baseSet = false;
+      video.src = Plex.streamUrl(P.item, { offset: P.offset, session: P.session, pb: pbFor('http') });
+      video.load();
+      playSafe();
+      return;
     }
-    video.src = Plex.streamUrl(P.item, args);
+
+    P.offset = 0; P.base = 0; P.baseSet = true;
+    const url = Plex.streamUrl(P.item, { offset: 0, session: P.session, pb: pbFor('hls') });
+
+    if (mode === 'hls-native') {
+      video.src = url;
+      video.load();
+      if (pos > 1) video.addEventListener('loadedmetadata', () => { try { video.currentTime = pos; } catch (e) { /* ignore */ } }, { once: true });
+      playSafe();
+      return;
+    }
+
+    // hls-js
+    loadHlsJs().then(() => {
+      if (my !== P.streamSeq) return;
+      if (!window.Hls || !window.Hls.isSupported()) { failMode('not supported here'); return; }
+      const hls = new window.Hls({ enableWorker: true, lowLatencyMode: false, maxBufferLength: 40, backBufferLength: 30, startPosition: pos > 1 ? pos : -1 });
+      P.hls = hls;
+      let mediaFixes = 0;
+      let netFixes = 0;
+      hls.on(window.Hls.Events.MANIFEST_PARSED, () => playSafe());
+      hls.on(window.Hls.Events.ERROR, (_ev, d) => {
+        if (my !== P.streamSeq || !d || !d.fatal) return;
+        if (d.type === window.Hls.ErrorTypes.MEDIA_ERROR && mediaFixes++ < 2) { hls.recoverMediaError(); return; }
+        // A refused/unparseable playlist won't fix itself, so don't wait: move to the next method.
+        const hopeless = /^manifest/.test(d.details || '') || (d.response && d.response.code >= 400 && d.response.code < 500);
+        if (d.type === window.Hls.ErrorTypes.NETWORK_ERROR && !hopeless && netFixes++ < 1) { hls.startLoad(); return; }
+        failMode((d.details || d.type || 'error') + (d.response && d.response.code ? ' (HTTP ' + d.response.code + ')' : ''));
+      });
+      hls.attachMedia(video);
+      hls.loadSource(url);
+    }).catch(() => { if (my === P.streamSeq) failMode('the hls.js library couldn\u2019t be loaded'); });
+  }
+
+  /** The current rung didn't work: remember why, then try the next one from where we were. */
+  function failMode(reason) {
+    if (!P.item) return;
+    const resumeAt = position();
+    P.errors.push(MODE_NAME[P.mode] + ': ' + reason);
+    teardownEngine();
+    P.idx += 1;
+    if (P.idx < P.ladder.length) { begin(resumeAt); return; }
+    finalFailure();
+  }
+
+  async function finalFailure() {
+    const item = P.item;
+    const session = P.session;
+    P.streamSeq += 1;
+    video.removeAttribute('src');
     video.load();
-    try {
-      await video.play();
-    } catch (e) {
-      if (e && e.name === 'NotAllowedError') { setLoading(false); showControls(); }
-    }
+    setLoading(false);
+    setPlayLabel(true);
+    const head = 'Version ' + VERSION + '. What was tried:\n' + P.errors.join('\n');
+    perrMsg.textContent = head + '\nChecking what the server sends\u2026';
+    perr.hidden = false;
+    ctrl.hidden = false;
+    topbar.hidden = false;
+    clearHide();
+    bExit.focus();
+
+    const hlsUrl = Plex.streamUrl(item, { offset: 0, session, pb: pbFor('hls') });
+    const mp4Url = Plex.streamUrl(item, { offset: 0, session, pb: pbFor('http') });
+    const a = P.ladder.indexOf('mp4') === 0 ? null : await Plex.probe(hlsUrl);
+    const b = pb.strategy === 'hls' ? null : await Plex.probe(mp4Url);
+    if (P.item !== item || P.session !== session) return;
+    perrMsg.textContent = head + '\nServer replies \u2014 ' +
+      (a ? 'HLS: ' + a : '') + (a && b ? ' | ' : '') + (b ? 'MP4: ' + b : '') +
+      (P.decisionText ? '\nPlan: ' + P.decisionText : '');
   }
 
   function inBuffered(t) {
@@ -511,14 +815,16 @@
     return false;
   }
 
-  /** Seek to an absolute position. Inside what's already buffered: instant. Otherwise ask the server to restart at that offset. */
+  /** Seek to an absolute position in the movie. */
   function seekTo(pos) {
     const max = P.dur > 0 ? Math.max(0, P.dur - 2) : Infinity;
     pos = Math.min(Math.max(0, pos), max);
+    if (P.mode !== 'mp4') { video.currentTime = pos; updateProgress(); return; }  // HLS: the stream is the whole movie
+    // MP4: inside what's already buffered is instant; otherwise the server restarts the stream at that offset.
     const rel = pos - P.offset + P.base;
     if (P.pending == null && inBuffered(rel)) { video.currentTime = rel; return; }
     P.pending = pos; // so rapid +15s presses accumulate instead of all starting from the old spot
-    startStream(pos, false);
+    begin(pos);
     updateProgress();
   }
   const seekBy = (delta) => seekTo((P.pending != null ? P.pending : position()) + delta);
@@ -537,10 +843,12 @@
   function teardownPlayer() {
     clearHide();
     clearInterval(P.tick);
+    teardownEngine();
     const item = P.item;
     const session = P.session;
     const pos = position();
     P.item = null;
+    P.streamSeq += 1;
     try { video.pause(); } catch (e) { /* ignore */ }
     video.removeAttribute('src');
     video.load();
@@ -554,8 +862,8 @@
   }
 
   function playerFailure(e) {
-    let msg = e && e.kind === 'network' ? 'Can\u2019t reach the Plex server.' : (e && e.message) || 'Playback failed.';
-    perrMsg.textContent = msg;
+    P.streamSeq += 1;
+    perrMsg.textContent = e && e.kind === 'network' ? 'Can\u2019t reach the Plex server.' : (e && e.message) || 'Playback failed.';
     perr.hidden = false;
     setLoading(false);
     ctrl.hidden = false;
@@ -565,25 +873,19 @@
 
   const MEDIA_ERR = { 1: 'aborted', 2: 'network error', 3: 'decode error', 4: 'format not supported' };
   video.addEventListener('error', () => {
-    if (!P.item || !video.getAttribute('src')) return;
+    if (!P.item || !video.getAttribute('src') || P.mode === 'hls-js') return; // hls.js reports its own errors
     const code = video.error ? video.error.code : 0;
-    const probe = video.canPlayType('video/mp4; codecs="avc1.640029, mp4a.40.2"') || 'no';
-    perrMsg.textContent = 'Playback failed (' + (MEDIA_ERR[code] || 'unknown') + '). ' +
-      (P.decisionText ? 'Server: ' + P.decisionText + '. ' : '') +
-      'This browser reports H.264/AAC MP4 support: ' + probe + '. See README, "If video won\u2019t play".';
-    perr.hidden = false;
-    setLoading(false);
-    ctrl.hidden = false;
-    topbar.hidden = false;
-    clearHide();
-    bExit.focus();
+    failMode(MEDIA_ERR[code] || 'error ' + code);
   });
 
   video.addEventListener('loadeddata', () => {
-    if (!P.baseSet) { P.base = video.buffered.length ? video.buffered.start(0) : 0; P.baseSet = true; }
+    if (P.mode === 'mp4' && !P.baseSet) { P.base = video.buffered.length ? video.buffered.start(0) : 0; P.baseSet = true; }
   });
-  video.addEventListener('playing', () => { setLoading(false); P.pending = null; setPlayLabel(false); perr.hidden = true; armHide(); });
-  video.addEventListener('waiting', () => setLoading(true));
+  video.addEventListener('playing', () => {
+    P.started = true; clearTimeout(P.watchdog);
+    setLoading(false); P.pending = null; setPlayLabel(false); perr.hidden = true; armHide();
+  });
+  video.addEventListener('waiting', () => { if (P.item && perr.hidden) setLoading(true, 'Loading\u2026'); });
   video.addEventListener('pause', () => { setPlayLabel(true); clearHide(); });
   video.addEventListener('play', () => setPlayLabel(false));
   video.addEventListener('timeupdate', updateProgress);

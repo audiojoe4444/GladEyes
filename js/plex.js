@@ -31,6 +31,8 @@
     });
   }
 
+  const nextFrame = () => new Promise((r) => (window.requestAnimationFrame ? requestAnimationFrame(() => r()) : setTimeout(r, 16)));
+
   // Keep list responses small: we only need a few fields per row.
   const TRIM = {
     excludeFields: 'summary,tagline',
@@ -58,10 +60,23 @@
     return out;
   }
 
+  /** What the first bytes of a response look like (used only for the on-screen "what did the server send?" report). */
+  function sniff(b) {
+    if (!b || !b.length) return 'empty reply';
+    const t = String.fromCharCode.apply(null, Array.prototype.slice.call(b, 0, 8));
+    if (t.indexOf('#EXTM3U') === 0) return 'an HLS playlist';
+    if (t.slice(4, 8) === 'ftyp') return 'MP4 data';
+    if (b[0] === 0x1a && b[1] === 0x45 && b[2] === 0xdf && b[3] === 0xa3) return 'Matroska/WebM data';
+    if (b[0] === 0x47) return 'MPEG-TS data';
+    if (t.charAt(0) === '<') return 'a web page/XML (an error?)';
+    return 'unrecognised data';
+  }
+
   const Plex = {
     server: '',
     token: '',
     clientId: '',
+    timeoutMs: Math.max(1000, (cfg.requestTimeoutSeconds || 15) * 1000),
 
     /** Resolve credentials. Order: launch URL > saved on device > config.js. */
     init() {
@@ -79,9 +94,9 @@
       const chrome = (navigator.userAgent.match(/Chrome\/(\d+)/) || [])[1] || '120';
       return {
         'X-Plex-Product': 'Plex Glasses',
-        'X-Plex-Version': '1.0.0',
+        'X-Plex-Version': '2.0.0',
         'X-Plex-Client-Identifier': this.clientId,
-        // "Chrome" makes the server apply its built-in Chrome client profile (H.264/AAC in MP4 etc.).
+        // "Chrome" makes the server apply its built-in Chrome client profile (H.264/AAC etc.).
         'X-Plex-Platform': 'Chrome',
         'X-Plex-Platform-Version': chrome,
         'X-Plex-Device': 'Meta Ray-Ban Display',
@@ -99,20 +114,34 @@
       return this.server + path + '?' + p.toString();
     },
 
-    async json(path, extra) {
-      let res;
+    /** GET JSON with a hard time limit covering the whole download, so nothing can hang forever. */
+    async json(path, extra, ms) {
+      const ctl = new AbortController();
+      const timer = setTimeout(() => ctl.abort(), ms || this.timeoutMs);
       try {
-        res = await fetch(this.url(path, extra), { headers: { Accept: 'application/json' } });
-      } catch (cause) {
-        const e = new Error('network'); e.kind = 'network'; e.cause = cause; throw e;
+        let res;
+        try {
+          res = await fetch(this.url(path, extra), { headers: { Accept: 'application/json' }, signal: ctl.signal });
+        } catch (cause) {
+          const e = new Error(cause && cause.name === 'AbortError' ? 'timeout' : 'network');
+          e.kind = e.message; e.cause = cause; throw e;
+        }
+        if (res.status === 401 || res.status === 403) { const e = new Error('auth'); e.kind = 'auth'; throw e; }
+        if (!res.ok) { const e = new Error('Server said ' + res.status); e.kind = 'http'; e.status = res.status; throw e; }
+        let text;
+        try { text = await res.text(); } catch (cause) {
+          const e = new Error(cause && cause.name === 'AbortError' ? 'timeout' : 'network');
+          e.kind = e.message; throw e;
+        }
+        let body;
+        try { body = JSON.parse(text); } catch (cause) { const e = new Error('The server sent something that wasn\u2019t JSON.'); e.kind = 'http'; throw e; }
+        return body.MediaContainer || {};
+      } finally {
+        clearTimeout(timer);
       }
-      if (res.status === 401 || res.status === 403) { const e = new Error('auth'); e.kind = 'auth'; throw e; }
-      if (!res.ok) { const e = new Error('Server said ' + res.status); e.kind = 'http'; e.status = res.status; throw e; }
-      const body = await res.json();
-      return body.MediaContainer || {};
     },
 
-    /** Fetch every page of a Metadata list (PMS paginates with X-Plex-Container-Start/Size). */
+    /** Fetch every page of a Metadata list (used for seasons/episodes, which are short). */
     async pages(path, extra, opts) {
       const size = (opts && opts.size) || 300;
       const cap = (opts && opts.cap) || 8000;
@@ -128,7 +157,6 @@
         total = typeof mc.totalSize === 'number' ? mc.totalSize : start + md.length;
         for (const m of md) out.push(m);
         start += md.length;
-        if (opts && opts.onProgress) opts.onProgress(out.length, total);
         if (!md.length) break;
       }
       return out;
@@ -137,11 +165,127 @@
     // ---------- browsing ----------
     async libraries() {
       const mc = await this.json('/library/sections');
-      return (mc.Directory || []).map((d) => ({ id: String(d.key), title: d.title || '', type: d.type }));
+      return (mc.Directory || []).map((d) => ({
+        id: String(d.key), title: d.title || '', type: d.type,
+        stamp: String(d.contentChangedAt || d.updatedAt || d.scannedAt || ''),
+      }));
     },
-    libraryItems(id, onProgress) {
-      return this.pages('/library/sections/' + encodeURIComponent(id) + '/all', Object.assign({ sort: 'titleSort:asc' }, TRIM), { onProgress });
+
+    /**
+     * A compact list of everything in a library ({k,t,s,y,ty,c} per item), built for big libraries:
+     *  - asks the server for the count first (size 0), so we know what to expect;
+     *  - downloads in a few parallel chunks, each with a time limit;
+     *  - a chunk that stalls or fails is split in half and retried; anything still failing is skipped
+     *    (and reported) rather than freezing the app;
+     *  - the result is cached on the device, so reopening the library is instant.
+     */
+    async libraryIndex(id, stamp, onProgress) {
+      const base = '/library/sections/' + encodeURIComponent(id) + '/all';
+      const args = Object.assign({ sort: 'titleSort:asc' }, TRIM);
+      const page = (start, size, ms) => this.json(base, Object.assign({}, args, {
+        'X-Plex-Container-Start': start, 'X-Plex-Container-Size': size,
+      }), ms);
+      const toRow = (m) => ({ k: String(m.ratingKey), t: m.title || '', s: m.titleSort || '', y: m.year || 0, ty: m.type || '', c: m.childCount || 0 });
+      const report = (done, total, note) => { if (onProgress) onProgress(done, total, note); };
+
+      const head = await page(0, 0);
+      const total = typeof head.totalSize === 'number' ? head.totalSize : null;
+
+      const ck = 'plex.idx.' + this.server + '|' + id;
+      if (total !== null) {
+        const hit = this.readIndexCache(ck, total, stamp);
+        if (hit) return { rows: hit, total, skipped: 0, cached: true };
+      }
+
+      let done = 0;
+      let skipped = 0;
+      const CHUNK = 500;
+      const CONCURRENCY = 3;
+
+      const once = async (start, count, attempt) => {
+        try {
+          const mc = await page(start, count, attempt ? Math.ceil(this.timeoutMs / 2) : this.timeoutMs);
+          return (mc.Metadata || []).map(toRow);
+        } catch (e) {
+          if (e.kind === 'auth') throw e;
+          report(done, total, 'retrying');
+          if (count > 40) {                       // split the troublesome range and try each half
+            const half = Math.ceil(count / 2);
+            const a = await range(start, half);
+            const b = await range(start + half, count - half);
+            return a.concat(b);
+          }
+          if (attempt < 1) return once(start, count, attempt + 1);
+          skipped += count;                       // give up on this small range, keep going
+          return [];
+        }
+      };
+      // The server may return fewer items than asked for; keep asking until the range is filled.
+      const range = async (start, count) => {
+        let out = [];
+        let s = start;
+        let left = count;
+        while (left > 0) {
+          const got = await once(s, left, 0);
+          if (!got.length) break;
+          out = out.concat(got);
+          s += got.length;
+          left -= got.length;
+        }
+        return out;
+      };
+
+      let rows;
+      if (total === null) {                       // very old server: no count available, page until it runs out
+        rows = [];
+        for (;;) {
+          const got = await range(rows.length, 300);
+          rows = rows.concat(got);
+          done = rows.length;
+          report(done, null);
+          await nextFrame();
+          if (got.length < 300) break;
+        }
+      } else {
+        const starts = [];
+        for (let s = 0; s < total; s += CHUNK) starts.push(s);
+        const parts = new Array(starts.length);
+        let next = 0;
+        const worker = async () => {
+          while (next < starts.length) {
+            const i = next++;
+            parts[i] = await range(starts[i], Math.min(CHUNK, total - starts[i]));
+            done += parts[i].length;
+            report(done, total);
+            await nextFrame();                    // let the screen repaint between chunks
+          }
+        };
+        const workers = [];
+        for (let w = 0; w < Math.min(CONCURRENCY, starts.length); w++) workers.push(worker());
+        await Promise.all(workers);
+        rows = [].concat.apply([], parts);
+      }
+
+      if (!skipped && total !== null) this.writeIndexCache(ck, total, stamp, rows);
+      return { rows, total: total === null ? rows.length : total, skipped, cached: false };
     },
+
+    readIndexCache(key, total, stamp) {
+      try {
+        const raw = store.get(key);
+        if (!raw) return null;
+        const c = JSON.parse(raw);
+        const ttl = (stamp ? 24 : 6) * 3600 * 1000;
+        if (c.v !== 1 || c.total !== total || (c.stamp || '') !== (stamp || '') || Date.now() - c.t > ttl) return null;
+        return c.rows.map((r) => ({ k: r[0], t: r[1], s: r[2], y: r[3], ty: r[4], c: r[5] }));
+      } catch (e) { return null; }
+    },
+    writeIndexCache(key, total, stamp, rows) {
+      try {
+        store.set(key, JSON.stringify({ v: 1, t: Date.now(), total, stamp: stamp || '', rows: rows.map((r) => [r.k, r.t, r.s, r.y, r.ty, r.c]) }));
+      } catch (e) { /* too big or blocked: fine, it just won't be cached */ }
+    },
+
     async metadata(id) {
       const mc = await this.json('/library/metadata/' + encodeURIComponent(id));
       return (mc.Metadata || [])[0] || null;
@@ -195,7 +339,7 @@
       };
     },
 
-    /** The URL to put in <video src>. The server starts transcoding on request. */
+    /** The URL to give the player. The server starts transcoding on request. */
     streamUrl(item, o) {
       const ext = o.pb.protocol === 'hls' ? 'm3u8' : (o.pb.container || 'mp4');
       return this.url('/video/:/transcode/universal/start.' + ext, this.transcodeArgs(item, o));
@@ -204,7 +348,7 @@
     /** Ask the server how it plans to serve this item (best effort, used for diagnostics). */
     async decision(item, o) {
       const ctl = new AbortController();
-      const timer = setTimeout(() => ctl.abort(), 4000);
+      const timer = setTimeout(() => ctl.abort(), 5000);
       try {
         const res = await fetch(this.url('/video/:/transcode/universal/decision', this.transcodeArgs(item, o)), {
           headers: { Accept: 'application/json' }, signal: ctl.signal,
@@ -216,6 +360,28 @@
         return null;
       } finally {
         clearTimeout(timer);
+      }
+    },
+
+    /** Fetch the start of a stream URL and describe what came back ("HTTP 200, video/mp4, MP4 data"). */
+    async probe(url) {
+      const ctl = new AbortController();
+      const timer = setTimeout(() => ctl.abort(), 8000);
+      try {
+        const res = await fetch(url, { signal: ctl.signal });
+        const type = (res.headers.get('content-type') || '').split(';')[0] || 'no type';
+        let what = '';
+        if (res.ok && res.body && res.body.getReader) {
+          const rd = res.body.getReader();
+          const r = await rd.read();
+          what = sniff(r.value);
+        }
+        return 'HTTP ' + res.status + ', ' + type + (what ? ', ' + what : '');
+      } catch (e) {
+        return e && e.name === 'AbortError' ? 'no reply within 8s' : 'blocked or unreachable';
+      } finally {
+        clearTimeout(timer);
+        try { ctl.abort(); } catch (e) { /* ignore */ }
       }
     },
 
