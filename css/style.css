@@ -319,3 +319,41 @@ body.mode-player .topbar {
   padding: .9rem 1.1rem 2rem;
   background: linear-gradient(to bottom, rgba(0, 0, 0, .85), transparent);
 }
+
+/* ---------- brand mark (Libraries screen) ---------- */
+.brand { flex: none; inline-size: 1.7rem; block-size: 1.7rem; fill: var(--accent); }
+
+/* ---------- Play button on the movie splash ---------- */
+.btn-play {
+  gap: .85rem;
+  min-block-size: 4.2rem;
+  padding: .55rem 1.8rem .55rem .65rem;
+  border-radius: 999px;
+  font-size: 1.45rem;
+  letter-spacing: .01em;
+}
+.play-badge {
+  display: grid; place-items: center;
+  inline-size: 3rem; block-size: 3rem;
+  border-radius: 50%;
+  background: var(--accent-ink);
+  color: var(--accent);
+  font-size: 1.7rem;
+}
+.play-badge .ico { display: grid; place-items: center; transform: translateX(.07em); }  /* optical centring of the triangle */
+.btn-play:focus { outline: 3px solid #fff; outline-offset: 3px; box-shadow: 0 0 0 7px var(--accent-soft); }
+
+/* ---------- player: visible "Controls" pill + stats line ---------- */
+.hint {
+  position: absolute; inset-inline: 0; inset-block-end: 1.2rem;
+  margin-inline: auto; inline-size: max-content;
+  padding: .55rem 1.3rem;
+  border: 1px solid rgba(255, 255, 255, .45);
+  border-radius: 999px;
+  background: rgba(24, 24, 24, .72);
+  color: #e8e8e8;
+  font-size: 1.05rem; font-weight: 600;
+  cursor: pointer;
+}
+.hint:focus { outline: 3px solid var(--accent); outline-offset: 3px; background: var(--accent); color: var(--accent-ink); }
+.pstat { margin: -.5rem 0 .7rem; font-size: .85rem; color: var(--muted); opacity: .85; font-variant-numeric: tabular-nums; }

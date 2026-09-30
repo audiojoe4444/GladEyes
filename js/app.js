@@ -14,11 +14,12 @@
 (function () {
   'use strict';
 
-  const VERSION = '2';
+  const VERSION = '3';
   const cfg = window.PLEX_CONFIG || {};
   const pb = Object.assign({
-    strategy: 'auto', container: 'mp4', videoResolution: '854x480', maxVideoBitrate: 2000,
+    strategy: 'auto', container: 'mp4', videoResolution: '640x360', maxVideoBitrate: 1200,
     forceTranscode: true, seekStepSeconds: 15, controlsHideMs: 6000, startTimeoutSeconds: 45, hlsJsUrl: '',
+    rebufferSeconds: 10, rebufferMaxSeconds: 25, autoLowerQuality: true,
   }, cfg.playback || {});
   const STEP = pb.seekStepSeconds;
   const MAX_INDEX = 4;     // host keeps at most 5 history entries (indexes 0..4)
@@ -45,8 +46,9 @@
   }
 
   const ICONS = {
-    play: '<svg viewBox="0 0 24 24" width="1.1em" height="1.1em" aria-hidden="true" focusable="false"><path fill="currentColor" d="M8 5v14l11-7z"/></svg>',
-    pause: '<svg viewBox="0 0 24 24" width="1.1em" height="1.1em" aria-hidden="true" focusable="false"><path fill="currentColor" d="M6 5h4v14H6zM14 5h4v14h-4z"/></svg>',
+    // rounded play triangle and pause bars (stroke + round joins gives soft corners)
+    play: '<svg viewBox="0 0 24 24" width="1em" height="1em" aria-hidden="true" focusable="false"><path d="M8.6 5.6v12.8l10.2-6.4z" fill="currentColor" stroke="currentColor" stroke-width="2.4" stroke-linejoin="round"/></svg>',
+    pause: '<svg viewBox="0 0 24 24" width="1em" height="1em" aria-hidden="true" focusable="false"><rect x="6" y="4.5" width="4.6" height="15" rx="1.8" fill="currentColor"/><rect x="13.4" y="4.5" width="4.6" height="15" rx="1.8" fill="currentColor"/></svg>',
   };
   function icon(name) {
     const s = document.createElement('span');
@@ -91,6 +93,8 @@
   const bPlay = $('#b-play');
   const bFwd = $('#b-fwd');
   const bExit = $('#b-exit');
+  const brand = $('#brand');
+  const pstat = $('#pstat');
 
   bRew.textContent = '\u2212' + STEP + 's';
   bFwd.textContent = '+' + STEP + 's';
@@ -274,9 +278,9 @@
       msg = 'Server: ' + host;
       detail = 'It took too long to reply. Check the server is awake and the connection is good, then try again.';
     } else if (e && e.kind === 'libs') {
-      title = 'Libraries not found';
-      msg = 'None of ' + (cfg.libraries || []).join(', ') + ' exist on this server.';
-      detail = 'Libraries on the server: ' + ((e.available || []).join(', ') || 'none') + '. Edit "libraries" in config.js.';
+      title = 'No movie or TV libraries';
+      msg = 'This server has no movie or TV show libraries this app can play.';
+      detail = 'Libraries on the server: ' + ((e.available || []).join(', ') || 'none') + '.';
     }
     screenEl.replaceChildren(h('div', { class: 'panel', role: 'alert' },
       h('h2', {}, title), h('p', {}, msg), detail ? h('p', { class: 'small' }, detail) : null,
@@ -297,6 +301,7 @@
     screenEl.hidden = isPlayer;
     playerEl.hidden = !isPlayer;
     topbar.hidden = isPlayer;
+    brand.toggleAttribute('hidden', state.screen !== 'libraries');   // (SVG elements have no .hidden property, so use the attribute)
 
     try {
       switch (state.screen) {
@@ -321,21 +326,23 @@
     const libs = await getLibraries();
     if (seq !== renderSeq) return;
 
-    const byName = new Map(libs.map((l) => [l.title.trim().toLowerCase(), l]));
-    const shown = [];
-    const missing = [];
-    (cfg.libraries || []).forEach((name) => {
-      const l = byName.get(String(name).trim().toLowerCase());
-      if (l) shown.push(l); else missing.push(name);
-    });
-    if (!shown.length) throw failure('libs', 'libs', { available: libs.map((l) => l.title) });
+    // Show every library this app can play (movies and TV). Names in "libraryOrder" come first, the rest follow in the server's order.
+    const playable = (l) => l.type === 'movie' || l.type === 'show';
+    const supported = libs.filter(playable);
+    const skipped = libs.filter((l) => !playable(l));
+    const pref = (cfg.libraryOrder || []).map((n) => String(n).trim().toLowerCase());
+    const rank = (l) => { const i = pref.indexOf(l.title.trim().toLowerCase()); return i < 0 ? pref.length : i; };
+    const shown = supported.map((l, i) => ({ l, i })).sort((a, b) => rank(a.l) - rank(b.l) || a.i - b.i).map((x) => x.l);
+    if (!shown.length) throw failure('libs', 'libs', { available: libs.map((l) => l.title + ' (' + l.type + ')') });
 
     showList(shown.map((l) => ({
       key: 'lib:' + l.id,
       label: l.title,
       onSelect: () => navigate({ screen: 'library', lib: l.id, title: l.title }),
     })));
-    if (missing.length) screenEl.append(h('p', { class: 'note' }, 'Not found on server: ' + missing.join(', ')));
+    if (skipped.length) {
+      screenEl.append(h('p', { class: 'note' }, 'Not shown (this app plays movies and TV only): ' + skipped.map((l) => l.title).join(', ')));
+    }
     screenEl.append(h('p', { class: 'note note-ver' }, 'Plex Glasses v' + VERSION));
     focusInitial();
   }
@@ -518,9 +525,9 @@
     poster.addEventListener('error', () => poster.classList.add('poster-missing'));
 
     const play = h('button', {
-      class: 'btn btn-primary', type: 'button', 'data-autofocus': '', 'data-key': 'play',
+      class: 'btn btn-primary btn-play', type: 'button', 'data-autofocus': '', 'data-key': 'play',
       onclick: () => navigate({ screen: 'player', id: m.ratingKey, kind: 'movie' }),
-    }, icon('play'), 'Play');
+    }, h('span', { class: 'play-badge' }, icon('play')), h('span', { class: 'play-text' }, 'Play'));
 
     screenEl.replaceChildren(h('article', { class: 'splash' },
       h('div', { class: 'splash-top' }, poster,
@@ -575,14 +582,26 @@
   //  If all fail, the screen says what each attempt did and what the server replied.
   // =====================================================================
   const P = {
-    item: null, session: '', mode: '', ladder: [], idx: 0, errors: [], resume: 0,
+    item: null, session: '', mode: '', ladder: [], idx: 0, errors: [], qs: [], q: 0,
     offset: 0, base: 0, baseSet: false, dur: 0, streamSeq: 0, pending: null, started: false,
+    needAdvance: false, advFrom: 0, stalls: 0, stallTimes: [], rebuf: false, rebufTimer: 0,
     hideTimer: 0, tick: 0, watchdog: 0, hls: null, decisionText: '',
   };
   const MODE_NAME = { 'hls-native': 'HLS', 'hls-js': 'HLS (hls.js)', mp4: 'MP4' };
+  // If playback keeps stalling, the app steps down through these (only ones below your configured quality are used).
+  const QUALITY = [{ r: '854x480', b: 2000 }, { r: '640x360', b: 1200 }, { r: '480x270', b: 700 }, { r: '426x240', b: 400 }];
+  // A 1x1 transparent picture: stops the browser drawing its own grey "play" placeholder over the black screen.
+  const BLANK = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
 
   const uuid = () => (window.crypto && crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2));
-  const pbFor = (protocol) => Object.assign({}, pb, { protocol });
+  const pbFor = (protocol) => {
+    const q = P.qs[P.q] || { r: pb.videoResolution, b: pb.maxVideoBitrate };
+    return Object.assign({}, pb, { protocol, videoResolution: q.r, maxVideoBitrate: q.b });
+  };
+  function buildQualities() {
+    const first = { r: pb.videoResolution, b: pb.maxVideoBitrate };
+    return [first].concat(pb.autoLowerQuality ? QUALITY.filter((q) => q.b < first.b) : []);
+  }
 
   function fullTitle(it) {
     if (it.type === 'episode') {
@@ -626,17 +645,32 @@
 
   function setLoading(on, text) {
     loadingEl.hidden = !on;
-    if (on) loadMsg.textContent = text || 'Loading\u2026';
+    if (on && text) loadMsg.textContent = text;
   }
   function setPlayLabel(paused) { bPlay.replaceChildren(icon(paused ? 'play' : 'pause'), paused ? 'Play' : 'Pause'); }
 
   const position = () => (P.mode === 'mp4' ? P.offset + Math.max(0, video.currentTime - P.base) : video.currentTime || 0);
+
+  /** Seconds of video already downloaded ahead of the playhead. */
+  function bufferedAhead() {
+    const t = video.currentTime;
+    const b = video.buffered;
+    for (let i = 0; i < b.length; i++) if (t >= b.start(i) - 0.1 && t <= b.end(i)) return Math.max(0, b.end(i) - t);
+    return 0;
+  }
 
   function updateProgress() {
     if (ctrl.hidden) return;
     const pos = P.pending != null ? P.pending : position();
     if (P.dur > 0) fill.style.width = Math.min(100, (pos / P.dur) * 100) + '%';
     ptime.textContent = fmtTime(pos) + (P.dur > 0 ? ' / ' + fmtTime(P.dur) : '');
+    const q = P.qs[P.q];
+    pstat.textContent = [
+      MODE_NAME[P.mode],
+      q ? q.r.replace('x', '\u00D7') + ' @ ' + q.b / 1000 + ' Mbps' : '',
+      'buffer ' + Math.round(bufferedAhead()) + 's',
+      'stalls ' + P.stalls,
+    ].filter(Boolean).join(' \u00B7 ');
   }
 
   function clearHide() { clearTimeout(P.hideTimer); P.hideTimer = 0; }
@@ -650,6 +684,7 @@
     topbar.hidden = false;
     updateProgress();
     if (!ctrl.contains(document.activeElement) && document.activeElement !== backBtn) bPlay.focus();
+    surface.hidden = true;
     armHide();
   }
 
@@ -658,6 +693,7 @@
     clearHide();
     ctrl.hidden = true;
     topbar.hidden = true;
+    surface.hidden = false;
     surface.focus({ preventScroll: true });
   }
 
@@ -665,15 +701,18 @@
     ctrl.hidden = true;
     perr.hidden = true;
     topbar.hidden = true;
+    surface.hidden = false;
     fill.style.width = '0%';
     ptime.textContent = '';
+    pstat.textContent = '';
     setPlayLabel(true);
-    setLoading(true);
+    setLoading(true, 'Loading\u2026');
   }
 
   async function showPlayer(state, seq) {
     resetPlayerUi();
     surface.focus({ preventScroll: true });
+    video.poster = BLANK;
     const item = await cached(cache.meta, state.id, () => Plex.metadata(state.id));
     if (seq !== renderSeq) return;
     if (!item) throw failure('http', 'That title is no longer on the server.');
@@ -683,6 +722,12 @@
     P.errors = [];
     P.ladder = buildLadder();
     P.idx = 0;
+    P.qs = buildQualities();
+    P.q = 0;
+    P.stalls = 0;
+    P.stallTimes = [];
+    P.rebuf = false;
+    clearTimeout(P.rebufTimer);
     P.pending = null;
     P.streamSeq = 0;
     P.dur = (item.duration || 0) / 1000;
@@ -709,24 +754,29 @@
 
   function teardownEngine() {
     clearTimeout(P.watchdog);
+    clearTimeout(P.rebufTimer);
+    P.rebuf = false;
     if (P.hls) { try { P.hls.destroy(); } catch (e) { /* ignore */ } P.hls = null; }
   }
 
   function playSafe() {
     const p = video.play();
     if (p && p.catch) {
-      p.catch((e) => { if (e && e.name === 'NotAllowedError') { setLoading(false); showControls(); } });
+      p.catch((e) => {
+        if (e && e.name === 'NotAllowedError') { clearTimeout(P.watchdog); setLoading(false); showControls(); }
+      });
     }
   }
 
   /** Start (or restart) playback with the current rung of the ladder, from `pos` seconds. */
-  function begin(pos) {
+  function begin(pos, message) {
     const my = ++P.streamSeq;
     teardownEngine();
     const mode = P.ladder[P.idx];
     P.mode = mode;
     P.started = false;
-    setLoading(true, P.idx > 0 ? 'Trying another way (' + MODE_NAME[mode] + ')\u2026' : 'Loading\u2026');
+    P.needAdvance = false;
+    setLoading(true, message || (P.idx > 0 ? 'Trying another way (' + MODE_NAME[mode] + ')\u2026' : 'Starting the transcoder\u2026'));
     armWatchdog(my);
 
     if (mode === 'mp4') {
@@ -754,7 +804,11 @@
     loadHlsJs().then(() => {
       if (my !== P.streamSeq) return;
       if (!window.Hls || !window.Hls.isSupported()) { failMode('not supported here'); return; }
-      const hls = new window.Hls({ enableWorker: true, lowLatencyMode: false, maxBufferLength: 40, backBufferLength: 30, startPosition: pos > 1 ? pos : -1 });
+      const hls = new window.Hls({
+        enableWorker: true, lowLatencyMode: false, startFragPrefetch: true,
+        maxBufferLength: 60, maxMaxBufferLength: 120, maxBufferSize: 80 * 1000 * 1000, backBufferLength: 20,
+        startPosition: pos > 1 ? pos : -1,
+      });
       P.hls = hls;
       let mediaFixes = 0;
       let netFixes = 0;
@@ -796,6 +850,7 @@
     perr.hidden = false;
     ctrl.hidden = false;
     topbar.hidden = false;
+    surface.hidden = true;
     clearHide();
     bExit.focus();
 
@@ -824,20 +879,64 @@
     const rel = pos - P.offset + P.base;
     if (P.pending == null && inBuffered(rel)) { video.currentTime = rel; return; }
     P.pending = pos; // so rapid +15s presses accumulate instead of all starting from the old spot
-    begin(pos);
+    begin(pos, 'Loading\u2026');
     updateProgress();
   }
   const seekBy = (delta) => seekTo((P.pending != null ? P.pending : position()) + delta);
 
   function togglePlay() {
+    if (P.rebuf) { P.rebuf = false; clearTimeout(P.rebufTimer); setLoading(false); setPlayLabel(true); return; } // you chose to pause while it was buffering
     if (video.ended) { seekTo(0); video.play().catch(() => {}); return; }
     if (video.paused) video.play().catch(() => {}); else video.pause();
+  }
+
+  // ---- stalls: hold on for a healthy cushion, and if it keeps happening, lower the quality ----
+  function onStall() {
+    const now = Date.now();
+    P.stalls += 1;
+    P.stallTimes = P.stallTimes.filter((t) => now - t < 90000).concat(now);
+    if (P.stallTimes.length >= 3 && P.q + 1 < P.qs.length) { stepDown(); return; }
+    if (P.dur > 0 && P.dur - position() < 20) return;            // nearly at the end: just let it finish
+    // Browsers restart the instant a sliver of data arrives, which gives stop-start every few seconds.
+    // With hls.js (where this app controls buffering) wait until several seconds are stored up, then resume.
+    // Plain MP4 / native HLS buffer on the browser's own terms, so there we leave it alone.
+    if (P.mode !== 'hls-js') return;
+    P.rebuf = true;
+    video.pause();
+    const t0 = now;
+    let best = bufferedAhead();
+    let grewAt = now;
+    const check = () => {
+      if (!P.rebuf || !P.item) return;
+      const ahead = bufferedAhead();
+      const t = Date.now();
+      if (ahead > best + 0.3) { best = ahead; grewAt = t; }
+      // resume when there's a healthy cushion, or the buffer has stopped growing, or we've waited long enough
+      if (ahead >= pb.rebufferSeconds || t - grewAt > 3000 || t - t0 > pb.rebufferMaxSeconds * 1000) {
+        P.rebuf = false;
+        video.play().catch(() => {});
+        return;
+      }
+      P.rebufTimer = setTimeout(check, 400);
+    };
+    clearTimeout(P.rebufTimer);
+    P.rebufTimer = setTimeout(check, 400);
+  }
+
+  function stepDown() {
+    const pos = position();
+    P.q += 1;
+    P.stallTimes = [];
+    const old = P.session;
+    P.session = uuid();                 // fresh transcode session at the lower quality
+    Plex.stop(old);
+    begin(pos, 'Lowering quality to keep it smooth\u2026');
   }
 
   function heartbeat() {
     if (!P.item) return;
     Plex.ping(P.session);
-    Plex.timeline(P.item, video.paused ? 'paused' : 'playing', position() * 1000, P.dur * 1000, P.session);
+    Plex.timeline(P.item, video.paused && !P.rebuf ? 'paused' : 'playing', position() * 1000, P.dur * 1000, P.session);
   }
 
   function teardownPlayer() {
@@ -868,6 +967,7 @@
     setLoading(false);
     ctrl.hidden = false;
     topbar.hidden = false;
+    surface.hidden = true;
     bExit.focus();
   }
 
@@ -881,20 +981,45 @@
   video.addEventListener('loadeddata', () => {
     if (P.mode === 'mp4' && !P.baseSet) { P.base = video.buffered.length ? video.buffered.start(0) : 0; P.baseSet = true; }
   });
+  // "playing" can fire before there is a picture (the browser is still filling its buffer),
+  // so the spinner stays until the clock has really moved.
   video.addEventListener('playing', () => {
-    P.started = true; clearTimeout(P.watchdog);
-    setLoading(false); P.pending = null; setPlayLabel(false); perr.hidden = true; armHide();
+    P.needAdvance = true;
+    P.advFrom = video.currentTime;
+    setPlayLabel(false);
+    perr.hidden = true;
+    armHide();
   });
-  video.addEventListener('waiting', () => { if (P.item && perr.hidden) setLoading(true, 'Loading\u2026'); });
-  video.addEventListener('pause', () => { setPlayLabel(true); clearHide(); });
-  video.addEventListener('play', () => setPlayLabel(false));
-  video.addEventListener('timeupdate', updateProgress);
+  video.addEventListener('timeupdate', () => {
+    if (P.needAdvance && !video.paused && Math.abs(video.currentTime - P.advFrom) > 0.25) {
+      P.needAdvance = false;
+      P.started = true;
+      clearTimeout(P.watchdog);
+      P.pending = null;
+      setLoading(false);
+    }
+    updateProgress();
+  });
+  video.addEventListener('waiting', () => {
+    if (!P.item || !perr.hidden) return;
+    if (P.started) setLoading(true, 'Buffering\u2026'); else loadingEl.hidden = false;
+    if (!P.started || video.seeking || P.rebuf || video.paused) return;
+    onStall();
+  });
+  video.addEventListener('pause', () => { if (P.rebuf) return; setPlayLabel(true); clearHide(); });
+  video.addEventListener('play', () => { if (!P.rebuf) setPlayLabel(false); });
   video.addEventListener('ended', () => { setPlayLabel(true); showControls(); if (P.item) Plex.timeline(P.item, 'stopped', P.dur * 1000, P.dur * 1000, P.session); });
 
   // Select on the video opens the controls; any key activity while they're open keeps them up.
   surface.addEventListener('click', showControls);
+  playerEl.addEventListener('click', () => { if (ctrl.hidden && perr.hidden) showControls(); });
   playerEl.addEventListener('keydown', armHide);
   playerEl.addEventListener('focusin', armHide);
+  // Belt and braces: however the glasses deliver "select" (or an arrow press) while nothing has focus, still open the controls.
+  document.addEventListener('keydown', (e) => {
+    if (!document.body.classList.contains('mode-player') || !ctrl.hidden || !perr.hidden || e.defaultPrevented) return;
+    if (e.key === 'Enter' || e.key === ' ' || e.key.indexOf('Arrow') === 0) { e.preventDefault(); showControls(); }
+  });
 
   bRew.addEventListener('click', () => seekBy(-STEP));
   bFwd.addEventListener('click', () => seekBy(STEP));

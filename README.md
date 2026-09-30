@@ -1,4 +1,4 @@
-# Plex for Meta Ray-Ban Display (v2)
+# Plex for Meta Ray-Ban Display (v3)
 
 A Plex client web app for the Meta Ray-Ban Display glasses. Libraries, list views, movie splash
 screens, season/episode browsing, and a fullscreen player. The Plex server does the
@@ -9,11 +9,13 @@ No build step. It is plain HTML, CSS and JavaScript.
 ## Screens
 
 ```
-Libraries (Movies, TV Shows, Cartoons)
-  Movies      -> A-Z strip + list -> movie splash (title, poster, description, Play) -> player
-  TV Shows /  -> A-Z strip + list -> seasons -> episodes -> player
-  Cartoons
+Libraries (every movie and TV library on your server)
+  Movie libraries -> A-Z strip + list -> movie splash (title, poster, description, Play) -> player
+  TV libraries    -> A-Z strip + list -> seasons -> episodes -> player
 ```
+
+Music and photo libraries aren't shown (this app plays movies and TV only). The Libraries screen tells you
+which ones were left out.
 
 - A small **Back** button sits at the top left of every screen. Move **Up** past the first row or **Left**
   past the list edge to select it. It runs `history.back()`, exactly like the glasses' own Back gesture.
@@ -21,8 +23,10 @@ Libraries (Movies, TV Shows, Cartoons)
   list. Move **Up** from the first row to reach the strip, **Right/Left** to pick a letter, **Select** to
   show those titles. Each letter shows 100 titles at a time; choose **Show more** at the end for the next 100.
   Going Back from a title returns you to the same letter and row.
-- In the player, **Select** opens: **-15s / Play-Pause / +15s / Exit**. Exit goes back to the movie's splash
-  screen (or the episode list for TV).
+- In the player, a small **Controls** pill sits at the bottom of the picture. **Select** opens: **-15s / Play-Pause /
+  +15s / Exit**. (If nothing has focus, any Select or arrow press opens them too.) Exit goes back to the movie's
+  splash screen (or the episode list for TV). Under the progress bar a stats line shows the playback method,
+  quality, seconds buffered and how many times it has stalled.
 - The first time a library opens it downloads a compact list of titles (a few seconds for thousands of
   titles) and saves it on the glasses. After that it opens instantly. It refreshes on its own when the
   library changes, or after 6-24 hours.
@@ -88,10 +92,12 @@ Use the middle tap for the Web App menu (**Restart / Resume / Permissions**).
 
 | Setting | What it does |
 |---|---|
-| `libraries` | Which libraries show, and in what order (matched by name) |
+| `libraryOrder` | Library names to list first, in this order. Every other movie/TV library follows in the server's order. `[]` = server order |
 | `requestTimeoutSeconds` | How long to wait for the server before giving up on one request (15) |
 | `playback.strategy` | `"auto"` (default): try every method in turn. Or force `"hls"` or `"mp4"` |
-| `playback.videoResolution` / `maxVideoBitrate` | Size and bitrate the server encodes to |
+| `playback.videoResolution` / `maxVideoBitrate` | Size and bitrate the server encodes to. Default 640x360 @ 1200 kbps: the display is 600 pixels wide, so this looks the same as 480p but is much lighter |
+| `playback.autoLowerQuality` | If playback keeps stalling (3 times in 90 s) step down to a lighter stream automatically (default on) |
+| `playback.rebufferSeconds` / `rebufferMaxSeconds` | With hls.js, after a stall wait for this many seconds to be stored up (10) but never longer than the maximum (25) |
 | `playback.forceTranscode` | `true` = always re-encode video (default). `false` lets Plex copy already-compatible video |
 | `playback.seekStepSeconds` | The skip size (15) |
 | `playback.startTimeoutSeconds` | Give up on one method and try the next if there is no picture by then (45) |
@@ -137,6 +143,25 @@ That last line is the most useful clue: the status, content type and what the da
 2. Set `strategy` to `"hls"` or `"mp4"` to test one method on its own.
 3. Check the Plex server can transcode (Plex Web > Settings > Transcoder), and that this movie plays in Plex Web.
 
+## If playback keeps buffering
+
+Watch the stats line under the progress bar (open the controls). A few things it can tell you:
+
+- **buffer stays near 0s and stalls climb:** the stream isn't arriving as fast as it plays. The app lowers the
+  quality by itself after three stalls in 90 seconds, and you can lower the defaults in `config.js` too
+  (`"480x270"` and `700`).
+- **The server is the bottleneck.** In Plex Web open **Settings > Status > Dashboard** while it plays and look at the
+  transcode entry. If its speed is below 1.0x your server can't encode fast enough: use a lower resolution, or turn
+  on hardware transcoding (needs Plex Pass) if the server has a supported graphics chip.
+- **Try letting Plex copy the video** (`forceTranscode: false`). If your files are already H.264 this uses almost no
+  server power, but the video is sent at its original bitrate, which may be too heavy for the glasses' connection.
+
+## About the logo
+
+`icons/plex-icon.png` (the app-grid icon) and `icons/favicon.png` are a bold chevron I drew in Plex's gold,
+in the spirit of Plex's own arrow. It isn't Plex's official artwork. If you publish this widely, check Plex's brand
+guidelines about using the name and logo in an unofficial app; you may want a different name and mark.
+
 ## Away from home
 
 `192-168-4-116...plex.direct` resolves to a private address, so it works only when the glasses (through the
@@ -158,6 +183,6 @@ js/app.js                                 screens, navigation, A-Z strip, player
 js/vendor/hls.min.js                      optional: your own copy of hls.js (see above)
 css/style.css                             theme
 .well-known/meta-wearables-manifest.json  app name + icon for the glasses' app grid
-icons/                                    app icon (monochrome mask) and PNG favicon
+icons/                                    app icon (monochrome mask, tinted gold by the glasses) and PNG favicon
 .nojekyll                                 lets GitHub Pages serve .well-known
 ```
