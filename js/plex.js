@@ -143,8 +143,8 @@
     identityBase() {
       const chrome = (navigator.userAgent.match(/Chrome\/(\d+)/) || [])[1] || '120';
       return {
-        'X-Plex-Product': 'Plex Glasses',
-        'X-Plex-Version': '6.0.0',
+        'X-Plex-Product': 'GladEyes',
+        'X-Plex-Version': '8.0.0',
         'X-Plex-Client-Identifier': this.clientId,
         // "Chrome" makes the server apply its built-in Chrome client profile (H.264/AAC etc.).
         'X-Plex-Platform': 'Chrome',

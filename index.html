@@ -3,14 +3,14 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Plex</title>
-  <meta name="description" content="A Plex client for Meta Ray-Ban Display glasses: browse your libraries and stream with server-side transcoding.">
-  <meta name="application-name" content="Plex">
+  <title>GladEyes</title>
+  <meta name="description" content="GladEyes: an unofficial app for watching your own Plex media on Meta Ray-Ban Display glasses.">
+  <meta name="application-name" content="GladEyes">
   <meta name="mrbd-web-app-capable" content="yes">
   <meta name="theme-color" content="#000000">
   <!-- PNG favicon (>52px): SVG favicons are a known issue on the glasses -->
   <link rel="icon" type="image/png" sizes="128x128" href="icons/favicon.png">
-  <link rel="stylesheet" href="css/style.css?v=6">
+  <link rel="stylesheet" href="css/style.css?v=8">
 </head>
 <body>
   <div id="app" class="app-shell">
@@ -20,8 +20,8 @@
       <button id="back" class="back" type="button" aria-label="Back">
         <span aria-hidden="true">&lsaquo;</span> Back
       </button>
-      <svg id="brand" class="brand" viewBox="0 0 64 64" aria-hidden="true" focusable="false"><path d="M20 8h15.5L54 32 35.5 56H20l18.5-24z"/></svg>
-      <h1 id="title" class="topbar-title">Plex</h1>
+      <svg id="brand" class="brand" viewBox="0 0 64 64" aria-hidden="true" focusable="false"><path class="b-brow" d="M5 28 L16 12 L27 28"/><path class="b-brow" d="M37 28 L48 12 L59 28"/><path class="b-eye" d="M8 53 Q16 36 24 53"/><path class="b-eye" d="M40 53 Q48 36 56 53"/></svg>
+      <h1 id="title" class="topbar-title">GladEyes</h1>
     </header>
 
     <main id="screen" class="screen"></main>
@@ -59,8 +59,8 @@
   </div>
   <noscript>This app needs JavaScript.</noscript>
 
-  <script src="config.js?v=6"></script>
-  <script src="js/plex.js?v=6"></script>
-  <script src="js/app.js?v=6"></script>
+  <script src="config.js?v=8"></script>
+  <script src="js/plex.js?v=8"></script>
+  <script src="js/app.js?v=8"></script>
 </body>
 </html>

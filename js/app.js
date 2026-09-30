@@ -1,5 +1,5 @@
 /*
- * Plex Glasses: screens, navigation and playback. Vanilla JS, no build step.
+ * GladEyes: screens, navigation and playback. Vanilla JS, no build step.
  *
  * Input model (per the Meta Ray-Ban Display web-app docs): the glasses' browser does the
  * directional focus movement between native <button>s and Enter activates them (a normal
@@ -14,7 +14,8 @@
 (function () {
   'use strict';
 
-  const VERSION = '6';
+  const APP_NAME = 'GladEyes';
+  const VERSION = '8';
   const cfg = window.PLEX_CONFIG || {};
   const pb = Object.assign({
     strategy: 'auto', hlsEngine: 'auto', container: 'mp4', videoResolution: '480x270', maxVideoBitrate: 600,
@@ -320,7 +321,7 @@
   // ---------- generic screen bits ----------
   function setTitle(text, showInBar) {
     titleEl.textContent = showInBar === false ? '' : text;
-    document.title = text || 'Plex';
+    document.title = text || APP_NAME;
   }
 
   function showLoading(text) {
@@ -466,7 +467,7 @@
     }
     const where = { local: 'your home network', remote: 'a remote connection', relay: 'Plex relay (slow, so video quality is lowered)' }[Plex.connType];
     if (where) screenEl.append(h('p', { class: 'note' }, 'Connected via ' + where + (Plex.serverName ? ' \u00B7 ' + Plex.serverName : '')));
-    screenEl.append(h('p', { class: 'note note-ver' }, 'Plex Glasses v' + VERSION),
+    screenEl.append(h('p', { class: 'note note-ver' }, APP_NAME + ' v' + VERSION),
       h('button', { class: 'btn btn-quiet', type: 'button', 'data-key': 'settings', onclick: () => navigate({ screen: 'settings' }) }, 'Settings'));
     focusInitial();
   }
@@ -834,6 +835,7 @@
       h('p', {}, who),
       h('p', {}, 'Server: ' + (Plex.serverName || host || 'not chosen yet') + (host && Plex.serverName ? ' (' + host + ')' : '')),
       h('p', {}, 'Connection: ' + how)), ul);
+    screenEl.append(h('p', { class: 'note' }, APP_NAME + ' v' + VERSION + ' \u00B7 an unofficial app, not made by or connected to Plex or Meta. The app itself collects nothing; your sign-in stays on this device.'));
     if (Plex.viaLink) screenEl.append(h('p', { class: 'note' }, 'Your launch link contains a token, so this app will sign in again on its next start. To stop that, edit the link in the Meta AI app and remove the #token part.'));
     screenEl.scrollTop = 0;
     focusInitial();
@@ -942,7 +944,7 @@
   function loadHlsJs() {
     if (window.Hls) return Promise.resolve();
     if (hlsLoad) return hlsLoad;
-    const urls = pb.hlsJsUrl ? [pb.hlsJsUrl] : ['js/vendor/hls.min.js', 'https://cdn.jsdelivr.net/npm/hls.js@1.5/dist/hls.min.js'];
+    const urls = pb.hlsJsUrl ? [pb.hlsJsUrl] : ['js/hls.min.js', 'js/vendor/hls.min.js', 'https://cdn.jsdelivr.net/npm/hls.js@1.5/dist/hls.min.js'];
     const attempt = (i) => new Promise((resolve, reject) => {
       const s = document.createElement('script');
       s.src = urls[i];

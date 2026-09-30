@@ -1,241 +1,128 @@
-# Plex for Meta Ray-Ban Display (v6)
+# GladEyes (v8)
 
-A Plex client web app for the Meta Ray-Ban Display glasses. Libraries, list views, movie splash
-screens, season/episode browsing, and a fullscreen player. The Plex server does the
-transcoding (Universal Transcoder), so the glasses only ever get a simple H.264/AAC stream.
+![GladEyes logo](icons/logo-512.png)
 
-No build step. It is plain HTML, CSS and JavaScript.
+GladEyes lets you watch the movies and TV in **your own Plex library** on **Meta Ray-Ban Display** glasses. It is a small
+web app: browse your libraries, pick something, and watch it in the glasses' lens. Your Plex server does the heavy
+lifting (it converts the video into a small, glasses-friendly stream), so the glasses only receive a light stream.
 
-## Screens
+> **GladEyes is an unofficial, independent project. It is not made by, endorsed by or connected to Plex or Meta.**
+> "Plex" is a trademark of Plex, Inc. Meta and Ray-Ban are trademarks of their owners. They are mentioned here only to
+> say what this app works with.
 
-```
-Libraries (every movie and TV library on your server)
-  Movie libraries -> A-Z strip + list -> movie splash (title, poster, description, Play) -> player
-  TV libraries    -> A-Z strip + list -> seasons -> episodes -> player
-```
+**Beta.** It has been tested with one Plex server and one pair of glasses. Please expect rough edges, and see
+"Reporting a problem" below.
 
-Music and photo libraries aren't shown (this app plays movies and TV only). The Libraries screen tells you
-which ones were left out.
+## What you need
 
-- A small **Back** button sits at the top left of every screen. Move **Up** past the first row or **Left**
-  past the list edge to select it. It runs `history.back()`, exactly like the glasses' own Back gesture.
-- **Big libraries:** a library with more than 80 titles shows a strip of letters (`# A B C ... Z`) above the
-  list. Each letter shows 100 titles at a time; choose **Show more** at the end for the next 100. Going Back from a
-  title returns you to the same letter and row.
-  - **Right** from anywhere in the list moves to the **next letter**, and **Left** to the **previous** one. The list
-    switches to that letter and the cursor lands on it in the strip (press **Down** to go into the list). You can keep
-    pressing Right/Left while on the strip to flick through letters. On the first letter, Left goes to the Back button.
-  - **Up** from the first title also reaches the strip, and **Select** on a letter jumps to it.
-- In the player, a small **Controls** pill sits at the bottom of the picture. It shows its label for a few seconds and
-  then shrinks to three faint dots (it has to stay on screen, because the glasses need something visible to select). **Select** opens: **-15s / Play-Pause /
-  +15s / Exit**. (If nothing has focus, any Select or arrow press opens them too.) Exit goes back to the movie's
-  splash screen (or the episode list for TV). Under the progress bar a stats line shows the playback method,
-  quality, seconds buffered and how many times it has stalled.
-- The first time a library opens it downloads a compact list of titles (a few seconds for thousands of
-  titles) and saves it on the glasses. After that it opens instantly. It refreshes on its own when the
-  library changes, or after 6-24 hours.
+- Meta Ray-Ban Display glasses with **Developer Mode** turned on (Meta's web apps are currently a developer preview;
+  the glasses need software v125 or newer and the Meta AI app v272 or newer).
+- A **Plex Media Server** with your own movies and TV, and a Plex account.
+- **Watching away from home:** turn on **Remote Access** in your Plex server's settings. Plex has said remote streaming
+  needs a **Plex Pass** (or a Remote Watch Pass), and that this extends to third-party apps in 2026. If the server's owner
+  has a Plex Pass, the people streaming from it don't need their own. At home, none of this applies.
 
-## Setup
+## Adding GladEyes to your glasses
 
-### 1. Put it on GitHub Pages
+1. In the Meta AI app on your phone: **Settings > App Info**, tap the version number five times, then **Enable** Developer Mode.
+2. **App Settings > Apps > Web Apps > Connect Web App**, paste the address of this app (the address of the page you are
+   reading this on, for example `https://<name>.github.io/<repo>/`), and **Save**.
+3. Open **GladEyes** from the glasses' app grid. The first time, the glasses show a short **code**. On your phone or
+   computer go to **plex.tv/link**, sign in to Plex if asked, and enter the code. The glasses carry on by themselves,
+   find your server, and remember you for next time. Nothing has to be typed on the glasses.
 
-The glasses can only load a public **HTTPS** URL, and GitHub Pages provides one for free.
+Use the middle tap on the glasses for the web app menu (**Restart / Resume / Permissions**).
 
-```bash
-cd plex-glasses
-git init -b main
-git add -A            # -A matters: it includes the hidden .nojekyll file and .well-known folder
-git commit -m "Plex for Meta Ray-Ban Display"
-git remote add origin https://github.com/<you>/<repo>.git
-git push -u origin main
-```
+## Using it
 
-Then on GitHub: **Settings > Pages > Build and deployment > Deploy from a branch > main / (root)**.
-Your app will be at `https://<you>.github.io/<repo>/`.
+- Libraries list, then a list of titles in alphabetical order. A **Back** button is at the top left of every screen: move
+  **Up** past the first row, or **Left** past the list's edge, to select it.
+- **Big libraries** show a strip of letters (`# A B C ... Z`) above the list. **Right** from anywhere in the list moves to
+  the **next letter** and **Left** to the **previous** one (the cursor lands on that letter in the strip; press **Down**
+  to go into the list). Each letter shows 100 titles at a time, with a **Show more** row at the end.
+- A movie opens a page with its poster, description and a **Play** button. A TV show opens its seasons, then the episodes.
+- While playing, **Select** opens the controls: **-15s / Play-Pause / +15s / Exit**. A small **Controls** pill at the bottom
+  of the picture is what you select. The line under the progress bar shows how it is playing (method, quality, buffer, stalls).
+- Every play starts from the beginning.
 
-Don't skip the hidden files: `.nojekyll` stops GitHub's Jekyll from hiding `.well-known/`, which holds the
-manifest the glasses read for the app name and icon. (GitHub's drag-and-drop web uploader tends to drop
-hidden files; use `git` or GitHub Desktop, or create them with **Add file > Create new file**.)
-
-**Updating later using only the GitHub website:** unzip the new version, open your repository,
-**Add file > Upload files**, drag in `index.html`, `config.js`, `README.md` and the `css` and `js`
-folders, and commit. Files with the same names are replaced. You don't need to touch the hidden files again.
-GitHub Pages takes a minute or two to publish. Then on the glasses use the middle tap for the Web App menu and
-choose **Restart**. The bottom of the Libraries screen shows the version you're running.
-
-### 2. Sign in (nothing secret goes in the repo)
-
-Everything on GitHub Pages is public, so **never commit your token**. There are two ways to sign in; the first
-needs no typing on the glasses and works at home or away.
-
-**A. Sign in with a code (recommended).** Connect the app using the plain address
-`https://<you>.github.io/<repo>/` (no token). The first time it opens, the glasses show a short code and
-`plex.tv/link`. On your phone or computer go to plex.tv/link, sign in if asked, and enter the code. The glasses carry
-on by themselves, find your server through your Plex account, and remember everything for next time.
-
-**B. A launch link with your token (the original way).** Put the token on the launch URL, once:
-
-```
-https://<you>.github.io/<repo>/#token=YOUR_PLEX_TOKEN
-```
-
-On first load the app saves the token on the device and removes it from the address bar. You can also set the
-server's address the same way: `#token=...&server=https%3A%2F%2F...`. If the Meta AI app's URL field drops everything
-after `#`, use `?token=YOUR_PLEX_TOKEN` instead. Find your token: in Plex Web open any item, **... > Get Info > View
-XML**, and copy `X-Plex-Token=` from the address bar. To revoke a token, remove the device under plex.tv > Account >
-Authorized Devices. (On the sign-in screen, **Use a token instead** lets you type a token and address by hand.)
-
-`serverUrl` in `config.js` is an optional starting address. Leave it as `""` for a copy you share with other people.
-
-### 3. Add it to the glasses
-
-1. Meta AI app: **Settings > App Info**, tap the version number five times, **Enable** Developer Mode.
-   (Needs glasses software v125+ and Meta AI app v272+.)
-2. **App Settings > Apps > Web Apps > Connect Web App**, paste your URL from step 2, **Save**.
-3. Plex appears at the bottom of the glasses' app grid. Pin it if you like.
-
-Use the middle tap for the Web App menu (**Restart / Resume / Permissions**).
-
-## Customising (`config.js`)
-
-| Setting | What it does |
-|---|---|
-| `libraryOrder` | Library names to list first, in this order. Every other movie/TV library follows in the server's order. `[]` = server order |
-| `requestTimeoutSeconds` | How long to wait for the server before giving up on one request (15) |
-| `playback.strategy` | `"auto"` (default): try every method in turn. Or force `"hls"` or `"mp4"` |
-| `playback.videoResolution` / `maxVideoBitrate` | Size and bitrate the server encodes to. Default 480x270 @ 600 kbps: small, but good on a 600-pixel display and light enough for smooth playback. The bitrate is the number that matters most: lower it for fewer stalls, raise it for more detail |
-| `playback.hlsEngine` | `"auto"` (default): the browser's own HLS player first. `"hlsjs"`: try the hls.js library first (it handles tiny gaps between video chunks differently, worth a try if you still see very short stalls). The stats line shows which one is running |
-| `playback.autoLowerQuality` | If playback keeps stalling (3 times in 90 s) step down to a lighter stream automatically (default on) |
-| `playback.rebufferSeconds` / `rebufferMaxSeconds` | With hls.js, after a stall wait for this many seconds to be stored up (10) but never longer than the maximum (25) |
-| `playback.forceTranscode` | `true` = always re-encode video (default). `false` lets Plex copy already-compatible video |
-| `playback.seekStepSeconds` | The skip size (15) |
-| `playback.startTimeoutSeconds` | Give up on one method and try the next if there is no picture by then (45) |
-| `playback.hlsJsUrl` | Optional: your own address for the hls.js library |
-
-## How playback works
-
-The Plex server always does the transcoding (`directPlay=0`, and by default `directStream=0`, so video and audio
-are both re-encoded to H.264 + stereo AAC). What differs is how the glasses' browser receives it, so the app
-tries these in order and moves on by itself if one fails:
-
-1. **HLS in the browser.** Plex's `start.m3u8` playlist, played natively (only tried if the browser says it can).
-2. **HLS through hls.js.** The same stream, played through the browser's Media Source API by the open-source
-   hls.js library.
-3. **Progressive MP4.** `start.mp4`. Seeking restarts the stream at a new offset.
-
-Meta doesn't publish a video codec list for Web Apps, which is why the app adapts instead of assuming.
-
-### hls.js
-
-The app loads hls.js only when it needs it, from `js/vendor/hls.min.js` if you've added it, otherwise from a public CDN
-(`cdn.jsdelivr.net`, version 1.5.x). That's a third-party script running on a page that holds your Plex token.
-To avoid it, host your own copy:
-
-1. Download `https://cdn.jsdelivr.net/npm/hls.js@1.5/dist/hls.min.js` and save it as `hls.min.js`.
-2. In your repository use **Add file > Upload files**, put it in a folder named `js/vendor/`, and commit.
-
-## If video won't play
-
-The player shows a report. It lists what each method did and what the server replied when asked for the
-stream, for example:
-
-```
-Version 2. What was tried:
-HLS (hls.js): manifestLoadError (HTTP 400)
-MP4: format not supported
-Server replies - HLS: HTTP 400, text/plain | MP4: HTTP 200, video/x-matroska, Matroska/WebM data
-```
-
-That last line is the most useful clue: the status, content type and what the data looks like. Things to try:
-
-1. Lower `videoResolution` (`"640x360"`) and `maxVideoBitrate` (`1200`).
-2. Set `strategy` to `"hls"` or `"mp4"` to test one method on its own.
-3. Check the Plex server can transcode (Plex Web > Settings > Transcoder), and that this movie plays in Plex Web.
-
-## If playback keeps buffering
-
-Watch the stats line under the progress bar (open the controls). A few things it can tell you:
-
-- **buffer stays near 0s and stalls climb:** the stream isn't arriving as fast as it plays. The app lowers the
-  quality by itself after three stalls in 90 seconds, and you can lower the defaults in `config.js` too
-  (`"480x270"` and `700`).
-- **Tiny stalls (fractions of a second) even though the buffer is healthy** are usually small hiccups where one
-  video chunk meets the next, not a shortage of data. Lowering the bitrate helps a little; trying
-  `hlsEngine: "hlsjs"` in `config.js` is the other thing to test.
-- **The server is the bottleneck.** In Plex Web open **Settings > Status > Dashboard** while it plays and look at the
-  transcode entry. If its speed is below 1.0x your server can't encode fast enough: use a lower resolution, or turn
-  on hardware transcoding (needs Plex Pass) if the server has a supported graphics chip.
-- **Try letting Plex copy the video** (`forceTranscode: false`). If your files are already H.264 this uses almost no
-  server power, but the video is sent at its original bitrate, which may be too heavy for the glasses' connection.
-
-## Diagnostics
-
-In **Settings > Diagnostics** (Settings is at the bottom of the Libraries screen) you'll find a page that shows the app and browser versions, whether
-the browser can play HLS natively, and a log of what the app did. The log is kept on the glasses, so after a problem
-(even a freeze that needed a Restart) you can open Diagnostics and read **Last session** to see what happened just
-before. During playback it records a line every 10 seconds (position, buffer, stalls), so the last line shows when
-things stopped. **Clear log** empties it.
-
-## Back and Exit
-
-Back and Exit go up one screen using the browser's history, so the glasses' own Back gesture and the on-screen buttons
-agree. Each screen also remembers where it came from, so if the browser's history ever misbehaves (for example the
-host refuses to add an entry, or ignores `history.back()`), the Back button and Exit still work. The video is stopped
-after the screen has changed, so a player that is slow or throws an error while stopping can't trap you on the player.
-
-## Where playback starts
-
-Every play starts at 0:00, even if you stopped part-way through last time. Some HLS players start a stream near its
-newest end instead of the beginning, so the app tells the player to start at 0, and if a stream still begins
-somewhere else (or jumps ahead in its first 15 seconds) it steps back to the start. When that happens the stats line
-says "start fixed (was Ns)". Your own -15s / +15s presses are never overridden.
-
-## About the logo
-
-`icons/plex-icon.png` (the app-grid icon) and `icons/favicon.png` are a bold chevron I drew in Plex's gold,
-in the spirit of Plex's own arrow. It isn't Plex's official artwork. If you publish this widely, check Plex's brand
-guidelines about using the name and logo in an unofficial app; you may want a different name and mark.
+**Settings** (bottom of the Libraries screen) shows who is signed in, which server and how you're connected, and has
+**Change server**, **Reconnect**, **Diagnostics** and **Sign out**.
 
 ## Watching away from home
 
-Every time it opens the app works out the best way to reach your server, in this order:
-1. **Your home network** (fast). Tried first, so at home it is instant.
-2. **A remote connection**: your server's public address. This needs **Remote Access** turned on in Plex (Settings >
-   Remote Access) so the server can be reached from outside your home.
-3. **Plex's relay**: a slower route Plex provides when the direct remote route isn't available. It is limited in
-   bandwidth, so when the app is connected this way it starts at a lighter quality (`relayResolution` /
-   `relayBitrate` in `config.js`).
+Each time it opens, GladEyes works out the best way to reach your server, in this order:
+1. **Your home network** (fast).
+2. **A remote connection**: your server's public address (needs Remote Access turned on).
+3. **Plex's relay**: slower, used when a direct remote connection isn't available. The app starts at a lighter quality
+   when connected this way.
 
-It gets the addresses from your Plex account, so you never type one. The Libraries screen says how it connected
-("Connected via your home network / a remote connection / Plex relay"), and **Settings** shows the same.
-If none of them answer you get a clear message listing what was tried, with Try again and Settings buttons.
+The Libraries screen says how it connected. If playback keeps stalling (common on mobile data) GladEyes lowers the quality
+by itself; the stats line shows what it is using.
 
-Plex has its own rules about remote streaming (for example some of its apps need a Plex Pass or Remote Watch Pass).
-Whether they apply to a custom app like this one isn't something this project can check, so test remote playback
-on your own account.
+## If video won't play, or keeps buffering
 
-## Settings
+The player shows a report listing what was tried and what your server replied. Open **Settings > Diagnostics** straight
+after a problem to see a log of what the app was doing. Things to try: lower `videoResolution` and `maxVideoBitrate` in
+`config.js` (for example `"426x240"` and `400`), check the movie plays in Plex Web, and check your server isn't struggling to convert
+video (Plex Web > Settings > Status > Dashboard shows the transcode speed while playing).
 
-At the bottom of the Libraries screen. It shows who is signed in, which server, and how you're connected, and has:
-**Change server** (when your account has more than one), **Reconnect** (test the connection again), **Diagnostics**,
-and **Sign out** (select twice to confirm). If you open the app from a launch link that contains a token, it signs in
-again on the next start; edit the link in the Meta AI app to remove the `#token` part if you want sign-out to stick.
+## Privacy
 
-## Desktop testing
+- GladEyes itself collects **nothing**: no analytics, no accounts of its own, no tracking.
+- Your Plex sign-in is stored **only on your glasses** (in the browser's local storage). **Sign out** in Settings removes it.
+- The app talks to: **plex.tv** (sign-in and finding your server), **your own Plex server**, and, only if needed, a
+  public copy of the hls.js video library (unless its file is hosted alongside the app; see below).
+- The page itself is hosted on GitHub Pages, which keeps ordinary web logs like any website.
 
-Install Chrome's **Meta Ray-Ban Display Simulator** extension, open the site, and use the on-screen D-pad
-(or the arrow keys and Enter). A 600 x 600 window matches the display.
+## Reporting a problem
+
+Open **Settings > Diagnostics** straight after it happens and read the **Last session** section. Please include that, your
+glasses' software version, and what you pressed.
+
+## Hosting your own copy
+
+Everything is plain HTML, CSS and JavaScript: no build step.
+
+1. Put the files in a GitHub repository (use `git add -A` or GitHub Desktop so the hidden `.nojekyll` file and `.well-known`
+   folder are included), then **Settings > Pages > Deploy from a branch > main / (root)**.
+2. **Never commit a Plex token.** People sign in with a code, so none is needed. (If you want a launch link with a token:
+   `https://<you>.github.io/<repo>/#token=YOUR_TOKEN`.)
+3. Put a copy of **hls.js** next to the app for safety: download
+   `https://cdn.jsdelivr.net/npm/hls.js@1.5/dist/hls.min.js`, save it as `hls.min.js`, and upload it into the `js` folder.
+   Without it the app falls back to that public address, and only when the glasses' own video player can't play the stream.
+4. `config.js` has the settings: `serverUrl` (optional starting address, leave `""` for a shared copy), `libraryOrder`,
+   the video quality (`videoResolution`, `maxVideoBitrate`, relay values), `strategy`, `hlsEngine` and more.
+
+| Setting | What it does |
+|---|---|
+| `libraryOrder` | Library names to list first. Every other movie/TV library follows in the server's order. `[]` = server order |
+| `playback.videoResolution` / `maxVideoBitrate` | What the server converts to. Default 480x270 @ 600 kbps (small, but good on a 600-pixel display) |
+| `playback.relayResolution` / `relayBitrate` | The starting quality when connected through Plex's relay (default 426x240 @ 400) |
+| `playback.autoLowerQuality` | Step down automatically after repeated stalls (default on) |
+| `playback.strategy` | `"auto"`, `"hls"` or `"mp4"`: which playback methods to try |
+| `playback.hlsEngine` | `"auto"` = the browser's own HLS player first, `"hlsjs"` = the hls.js library first |
+| `playback.rebufferSeconds` / `rebufferMaxSeconds` | With hls.js: how much to store up after a stall, and the longest to wait |
+| `requestTimeoutSeconds` | How long to wait for the server before giving up on one request |
+
+How playback works: the Plex server always does the conversion (`directPlay=0`, video and audio re-encoded to H.264 +
+stereo AAC). The app tries, in order, the browser's own HLS player, the hls.js library, then progressive MP4, moving on by
+itself if one fails. Playback starts at 0:00; the app steps back to the start if a player begins elsewhere.
 
 ## Files
 
 ```
 index.html                                page shell
-config.js                                 server address, libraries, transcode settings (no secrets)
-js/plex.js                                Plex API, sign-in by code, finding the server, library loading and cache, Universal Transcoder URLs
-js/app.js                                 screens, navigation, A-Z strip, player and fallbacks
-js/vendor/hls.min.js                      optional: your own copy of hls.js (see above)
+config.js                                 settings (no secrets)
+js/plex.js                                Plex API: sign-in by code, finding the server, library loading and cache, stream URLs
+js/app.js                                 screens, navigation, letter strip, player, settings, diagnostics
+js/hls.min.js                             optional: your own copy of hls.js (see above)
 css/style.css                             theme
 .well-known/meta-wearables-manifest.json  app name + icon for the glasses' app grid
-icons/                                    app icon (monochrome mask, tinted gold by the glasses) and PNG favicon
+icons/                                    app icon (one-colour, tinted by the glasses), browser icon, logo
+LICENSE                                   MIT licence
 .nojekyll                                 lets GitHub Pages serve .well-known
 ```
+
+## Licence
+
+MIT. See `LICENSE`.

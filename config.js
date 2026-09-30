@@ -13,7 +13,7 @@ window.PLEX_CONFIG = {
   // certificate, which the glasses need). If it stops working (for example you're away from home) the app asks
   // plex.tv where your server is now, so you can leave this as "" and just sign in with a code.
   // Can be overridden per launch with  #server=https%3A%2F%2F...
-  serverUrl: "https://192-168-4-116.57fb472612144afbb22b40dfe4cfb2e9.plex.direct:32400",
+  serverUrl: "",
 
   // Every movie and TV library on the server is shown. Names listed here come first, in this order;
   // any others follow in the server's own order. Use [] to just follow the server's order.
