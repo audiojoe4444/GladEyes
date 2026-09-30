@@ -1,1 +1,12 @@
-
+{
+  "version": 1,
+  "name": "Plex",
+  "description": "Browse your Plex libraries and watch on Meta Ray-Ban Display.",
+  "appearance": {
+    "theme_color": "#E5A00D",
+    "icon": {
+      "src": "../icons/plex-icon.png",
+      "type": "monochrome"
+    }
+  }
+}
