@@ -1,11 +1,11 @@
 {
   "version": 1,
-  "name": "Plex",
-  "description": "Browse your Plex libraries and watch on Meta Ray-Ban Display.",
+  "name": "GladEyes",
+  "description": "Watch your own Plex media on Meta Ray-Ban Display.",
   "appearance": {
-    "theme_color": "#E5A00D",
+    "theme_color": "#2FE0C0",
     "icon": {
-      "src": "../icons/plex-icon.png",
+      "src": "../icons/gladeyes-icon.png",
       "type": "monochrome"
     }
   }
