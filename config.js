@@ -15,6 +15,10 @@ window.PLEX_CONFIG = {
   // Can be overridden per launch with  #server=https%3A%2F%2F...
   serverUrl: "",
 
+  // Opening a movie library first shows a menu: Continue Watching / Recently Added / Library / Collections.
+  // Set to false to go straight to the A-Z list instead.
+  movieMenu: true,
+
   // Every movie and TV library on the server is shown. Names listed here come first, in this order;
   // any others follow in the server's own order. Use [] to just follow the server's order.
   libraryOrder: ["Movies", "TV Shows", "Cartoons"],

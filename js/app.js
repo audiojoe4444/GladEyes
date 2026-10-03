@@ -15,7 +15,7 @@
   'use strict';
 
   const APP_NAME = 'GladEyes';
-  const VERSION = '10';
+  const VERSION = '11';
   const cfg = window.PLEX_CONFIG || {};
   const pb = Object.assign({
     strategy: 'auto', hlsEngine: 'auto', container: 'mp4', maxVideoBitrate: 600,
@@ -130,6 +130,9 @@
   const bPlay = $('#b-play');
   const bFwd = $('#b-fwd');
   const bExit = $('#b-exit');
+  const railEl = $('#rail');
+  const rUp = $('#r-up');
+  const rDown = $('#r-down');
   const toastEl = $('#toast');
   let toastTimer = 0;
   function toast(text) {
@@ -161,7 +164,8 @@
   let libCtx = null;            // the A-Z screen that is showing (for left/right letter stepping)
   let signTimers = [];
   let connecting = null;
-  const NEEDS_SERVER = new Set(['library', 'movie', 'show', 'season', 'player']);
+  const NEEDS_SERVER = new Set(['moviemenu', 'continue', 'recent', 'collections', 'collection', 'library', 'movie', 'episode', 'show', 'season', 'player']);
+  const progressMemory = new Map();   // what we last saw of each title's watch position (the server may be a moment behind)
   const cache = { libs: null, items: new Map(), meta: new Map(), kids: new Map() };
 
   function cached(map, key, load) {
@@ -303,6 +307,13 @@
     if (e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
     if (topbar.hidden) return;
     const a = document.activeElement;
+    if (railEl.contains(a)) {                                   // on the page rail
+      if (e.key === 'ArrowUp') { e.preventDefault(); rUp.focus(); }
+      else if (e.key === 'ArrowDown') { e.preventDefault(); rDown.focus(); }
+      else if (e.key === 'ArrowLeft') { e.preventDefault(); focusFirstVisibleRow(); }
+      else if (e.key === 'ArrowRight' && libCtx) { e.preventDefault(); stepLetter(1); }
+      return;
+    }
     if (a === backBtn) {
       if (e.key === 'ArrowDown') { e.preventDefault(); focusPrimary(); }
       return;
@@ -314,7 +325,8 @@
     if (strip && libCtx && libCtx.strip === strip) {
       // Right / Left from the list (or the strip) step to the next / previous letter, with focus on that letter.
       const onLib = a.classList.contains('item') || a.classList.contains('chip');
-      if (onLib && e.key === 'ArrowRight') { e.preventDefault(); stepLetter(1); return; }
+      // (when the page rail is showing, Right from a title goes to the rail first; Right again steps to the next letter)
+      if (onLib && e.key === 'ArrowRight' && !(a.classList.contains('item') && railVisible())) { e.preventDefault(); stepLetter(1); return; }
       if (onLib && e.key === 'ArrowLeft' && letterIndex() > 0) { e.preventDefault(); stepLetter(-1); return; }
       // (on the first letter, Left falls through to the Back-button rule below)
     }
@@ -334,11 +346,47 @@
       }
     }
 
+    if (e.key === 'ArrowRight' && a.classList.contains('item') && railVisible()) { e.preventDefault(); rDown.focus(); return; }
+
     if (e.key !== 'ArrowLeft' && e.key !== 'ArrowUp') return;
     if (!isEdge(a, e.key)) return;
     e.preventDefault();
     backBtn.focus();
   });
+
+  // ---------- page up / page down rail ----------
+  // Shown when a list is longer than about a screen. Right from a title moves onto it; Up / Down choose a button,
+  // Select pages the list by a screenful; Left goes back to the titles; Right (on a letter list) steps to the next letter.
+  const railVisible = () => !railEl.hidden;
+  function updateRail() {
+    const rows = screenEl.hidden ? 0 : screenEl.querySelectorAll('.list > li').length;
+    const show = rows >= 7 && !topbar.hidden && !document.body.classList.contains('mode-player');
+    railEl.hidden = !show;
+    screenEl.classList.toggle('rail-room', show);
+    if (show) {
+      const strip = $('#letters', screenEl);
+      const top = (strip ? strip.getBoundingClientRect().bottom : screenEl.getBoundingClientRect().top) + 6;
+      railEl.style.insetBlockStart = Math.round(top) + 'px';
+    }
+  }
+  new MutationObserver(() => requestAnimationFrame(updateRail)).observe(screenEl, { childList: true, subtree: true });
+
+  function pageBy(dir) {
+    const strip = $('#letters', screenEl);
+    const stripH = strip ? strip.getBoundingClientRect().height : 0;
+    const view = Math.max(120, screenEl.clientHeight - stripH - 30);
+    const atBottom = screenEl.scrollTop + screenEl.clientHeight >= screenEl.scrollHeight - 4;
+    if (dir > 0 && atBottom && libCtx && libCtx.rowsHost._more) libCtx.rowsHost._more();     // reveal the next hundred titles
+    screenEl.scrollBy({ top: dir * view, behavior: 'auto' });
+  }
+  rUp.addEventListener('click', () => pageBy(-1));
+  rDown.addEventListener('click', () => pageBy(1));
+  function focusFirstVisibleRow() {
+    const top = ($('#letters', screenEl) || screenEl).getBoundingClientRect().bottom;
+    const rows = Array.prototype.slice.call(screenEl.querySelectorAll('.item'));
+    const row = rows.find((r) => r.getBoundingClientRect().top >= top - 4) || rows[rows.length - 1];
+    if (row) row.focus();
+  }
 
   // ---------- generic screen bits ----------
   function setTitle(text, showInBar) {
@@ -426,6 +474,7 @@
     current = state;
     const seq = ++renderSeq;
     libCtx = null;
+    railEl.hidden = true;
     clearSignTimers();
 
     const isPlayer = state.screen === 'player';
@@ -444,8 +493,14 @@
         case 'settings': showSettings(); break;
         case 'servers': await showServers(seq); break;
         case 'manual': showManual(); break;
+        case 'moviemenu': showMovieMenu(state); break;
+        case 'continue': await showMovieList(state, seq, 'continue'); break;
+        case 'recent': await showMovieList(state, seq, 'recent'); break;
+        case 'collections': await showCollections(state, seq); break;
+        case 'collection': await showCollection(state, seq); break;
         case 'library': await showLibrary(state, seq); break;
-        case 'movie': await showMovie(state, seq); break;
+        case 'movie':
+        case 'episode': await showItem(state, seq); break;
         case 'show': await showShow(state, seq); break;
         case 'season': await showSeason(state, seq); break;
         case 'diag': showDiag(); break;
@@ -482,7 +537,7 @@
     showList(shown.map((l) => ({
       key: 'lib:' + l.id,
       label: l.title,
-      onSelect: () => navigate({ screen: 'library', lib: l.id, title: l.title }),
+      onSelect: () => navigate({ screen: l.type === 'movie' && cfg.movieMenu !== false ? 'moviemenu' : 'library', lib: l.id, title: l.title }),
     })));
     if (skipped.length) {
       screenEl.append(h('p', { class: 'note' }, 'Not shown (this app plays movies and TV only): ' + skipped.map((l) => l.title).join(', ')));
@@ -503,6 +558,7 @@
   // ---------- screen: a library's items, alphabetical ----------
   function openRow(r) {
     if (r.ty === 'movie') navigate({ screen: 'movie', id: r.k, title: r.t });
+    else if (r.ty === 'collection') navigate({ screen: 'collection', id: r.k, title: r.t, lib: current.lib });
     else if (r.ty === 'show') navigate({ screen: 'show', id: r.k, title: r.t });
     else if (r.ty === 'season') navigate({ screen: 'season', id: r.k, title: r.t });
     else navigate({ screen: 'player', id: r.k, kind: r.ty });
@@ -512,7 +568,9 @@
     return {
       key: 'it:' + r.k,
       label: r.t,
-      sub: r.ty === 'show' && r.c ? r.c + (r.c === 1 ? ' season' : ' seasons') : (r.y || ''),
+      sub: r.ty === 'collection' ? (r.c ? r.c + (r.c === 1 ? ' film' : ' films') : '')
+        : r.vo >= PROGRESS_MIN && r.d && r.vo < r.d * 0.95 ? 'Resume ' + fmtTime(r.vo / 1000) + ' of ' + fmtTime(r.d / 1000)
+        : r.ty === 'show' && r.c ? r.c + (r.c === 1 ? ' season' : ' seasons') : (r.y || ''),
       onSelect: () => openRow(r),
     };
   }
@@ -580,8 +638,10 @@
     focusInitial();
   }
 
+  const lkey = (st) => (st.screen === 'collections' ? st.lib + ':c' : st.lib);
+
   function renderLetters(state, idx) {
-    const remembered = lastLetter.get(state.lib) || Plex.recall('letter.' + state.lib);
+    const remembered = lastLetter.get(lkey(state)) || Plex.recall('letter.' + lkey(state));
     const letter = idx.buckets.has(state.letter) ? state.letter
       : idx.buckets.has(remembered) ? remembered : idx.letters[0];
     const rowsHost = h('div', { id: 'rows', class: 'rows' });
@@ -613,8 +673,8 @@
 
   /** Show a letter's titles. `focus` says where the cursor goes afterwards: the first title, or the letter itself. */
   function pickLetter(state, idx, strip, rowsHost, L, focus) {
-    lastLetter.set(state.lib, L);            // Back from a title returns to this letter (remembered here, not in browser history)
-    Plex.remember('letter.' + state.lib, L);
+    lastLetter.set(lkey(state), L);            // Back from a title returns to this letter (remembered here, not in browser history)
+    Plex.remember('letter.' + lkey(state), L);
     state.letter = L;
     if (libCtx) libCtx.letter = L;
     Array.prototype.forEach.call(strip.children, (c) => {
@@ -674,30 +734,107 @@
     };
 
     addRows(limit);
+    host._more = () => { if (!moreLi) return false; addRows(PAGE); return true; };
     host.replaceChildren(ul);
   }
 
-  // ---------- screen: movie splash ----------
-  async function showMovie(state, seq) {
+  // ---------- Movies: menu, Continue Watching, Recently Added, Collections ----------
+  const MENU_COUNT = 10;
+  const PROGRESS_MIN = 15000;       // under 15 seconds in doesn't count as "part-way"
+  const toRow = (m) => ({ k: String(m.ratingKey), t: m.title || '', s: m.titleSort || '', y: m.year || 0, ty: m.type || '', c: m.childCount || 0, vo: viewOffsetOf(m), d: m.duration || 0 });
+
+  /** Where this title was last up to (ms). Trust what we saw a moment ago over a server that may not have caught up. */
+  function viewOffsetOf(m) {
+    const mem = progressMemory.get(String(m.ratingKey));
+    if (mem && Date.now() - mem.t < 10 * 60 * 1000) return mem.ms;
+    return m.viewOffset || 0;
+  }
+  /** Seconds to resume from, or 0 when it isn't part-way (not started, or finished). */
+  function resumeSeconds(m) {
+    const ms = viewOffsetOf(m);
+    const dur = m.duration || 0;
+    return ms >= PROGRESS_MIN && (!dur || ms < dur * 0.95) ? Math.floor(ms / 1000) : 0;
+  }
+
+  function showMovieMenu(state) {
+    setTitle(state.title);
+    const go = (screen) => () => navigate({ screen, lib: state.lib, title: state.title });
+    showList([
+      { key: 'mm:continue', label: 'Continue Watching', sub: 'Pick up where you left off', onSelect: go('continue') },
+      { key: 'mm:recent', label: 'Recently Added', sub: 'The newest ' + MENU_COUNT + ' films', onSelect: go('recent') },
+      { key: 'mm:library', label: 'Library', sub: 'Everything, A to Z', onSelect: go('library') },
+      { key: 'mm:collections', label: 'Collections', sub: 'Films grouped together', onSelect: go('collections') },
+    ]);
+    focusInitial();
+  }
+
+  async function showMovieList(state, seq, kind) {
+    setTitle(state.title + ' \u00B7 ' + (kind === 'continue' ? 'Continue Watching' : 'Recently Added'));
+    showLoading();
+    let items = kind === 'continue' ? await Plex.continueWatching(state.lib, MENU_COUNT) : await Plex.recentlyAdded(state.lib, MENU_COUNT);
+    if (seq !== renderSeq) return;
+    if (kind === 'continue') items = items.filter((m) => resumeSeconds(m) > 0);
+    showList(items.map(toRow).map(rowOpts), kind === 'continue' ? 'Nothing is part-way through right now.' : 'Nothing has been added recently.');
+    focusInitial();
+  }
+
+  async function showCollections(state, seq) {
+    setTitle(state.title + ' \u00B7 Collections');
+    showLoading();
+    const list = await Plex.collections(state.lib);
+    if (seq !== renderSeq) return;
+    if (!list.length) { screenEl.replaceChildren(h('div', { class: 'status' }, 'No collections in this library yet.')); return; }
+    const rows = list.map((m) => ({ k: String(m.ratingKey), t: m.title || '', s: m.titleSort || '', y: 0, ty: 'collection', c: +(m.childCount || m.size || 0), vo: 0, d: 0 }));
+    if (rows.length <= FLAT_MAX) showList(rows.slice().sort(rowCmp).map(rowOpts));
+    else renderLetters(state, makeIndex({ rows, total: rows.length, skipped: 0 }));
+    focusInitial();
+  }
+
+  async function showCollection(state, seq) {
+    setTitle(state.title);
+    showLoading();
+    const items = await Plex.collectionItems(state.id);
+    if (seq !== renderSeq) return;
+    showList(items.map(toRow).map(rowOpts), 'This collection is empty.');   // in the order the collection is set up in Plex
+    focusInitial();
+  }
+
+  // ---------- screen: a film's (or episode's) page, with Resume / Start from beginning ----------
+  async function showItem(state, seq) {
     setTitle(state.title || 'Movie');
     showLoading();
+    cache.meta.delete(state.id);          // always fresh: the watch position may have changed
     const m = await cached(cache.meta, state.id, () => Plex.metadata(state.id));
     if (seq !== renderSeq) return;
     if (!m) throw failure('http', 'That title is no longer on the server.');
-    setTitle(m.title, false); // the splash shows the title itself
+    setTitle(m.title, false); // the page shows the title itself
 
-    const meta = [m.year, m.duration ? fmtDur(m.duration) : '', m.contentRating].filter(Boolean).join(' \u00B7 ');
-    const poster = h('img', { class: 'poster', src: Plex.image(m.thumb, 300, 450), alt: '', decoding: 'async' });
+    const isEp = m.type === 'episode';
+    const resume = resumeSeconds(m);
+    const meta = isEp
+      ? [m.grandparentTitle, (m.parentIndex != null ? 'S' + m.parentIndex : '') + (m.index != null ? ' E' + m.index : ''), m.duration ? fmtDur(m.duration) : ''].filter(Boolean).join(' \u00B7 ')
+      : [m.year, m.duration ? fmtDur(m.duration) : '', m.contentRating].filter(Boolean).join(' \u00B7 ');
+    const poster = h('img', { class: 'poster' + (isEp ? ' wide' : ''), src: Plex.image(m.thumb, isEp ? 400 : 300, isEp ? 225 : 450), alt: '', decoding: 'async' });
     poster.addEventListener('error', () => poster.classList.add('poster-missing'));
 
-    const play = h('button', {
-      class: 'btn btn-primary btn-play', type: 'button', 'data-autofocus': '', 'data-key': 'play',
-      onclick: () => navigate({ screen: 'player', id: m.ratingKey, kind: 'movie' }),
-    }, h('span', { class: 'play-badge' }, icon('play')), h('span', { class: 'play-text' }, 'Play'));
+    const start = (at) => navigate({ screen: 'player', id: m.ratingKey, kind: m.type, resume: at });
+    const primary = (label, at, key) => h('button', {
+      class: 'btn btn-primary btn-play', type: 'button', 'data-autofocus': '', 'data-key': key, onclick: () => start(at),
+    }, h('span', { class: 'play-badge' }, icon('play')), h('span', { class: 'play-text' }, label));
+    const buttons = resume
+      ? [primary('Resume ' + fmtTime(resume), resume, 'resume'),
+        h('button', { class: 'btn btn-start', type: 'button', 'data-key': 'beginning', onclick: () => start(0) }, 'Start from beginning')]
+      : [primary('Play', 0, 'play')];
+    let bar = null;
+    if (resume && m.duration) {
+      const fillEl = h('div', { class: 'pfill' });
+      fillEl.style.width = Math.min(100, (resume * 1000 / m.duration) * 100) + '%';
+      bar = h('div', { class: 'pbar', 'aria-hidden': 'true' }, fillEl);
+    }
 
     screenEl.replaceChildren(h('article', { class: 'splash' },
       h('div', { class: 'splash-top' }, poster,
-        h('div', { class: 'splash-info' }, h('h2', { class: 'splash-title' }, m.title), meta ? h('p', { class: 'meta' }, meta) : null, play)),
+        h('div', { class: 'splash-info' }, h('h2', { class: 'splash-title' }, m.title), meta ? h('p', { class: 'meta' }, meta) : null, bar, buttons)),
       h('div', { class: 'summary', tabindex: '0', role: 'region', 'aria-label': 'Description', 'data-key': 'summary' },
         m.summary || 'No description available.')));
     screenEl.scrollTop = 0;
@@ -907,12 +1044,18 @@
     const kids = await cached(cache.kids, state.id, () => Plex.children(state.id));
     if (seq !== renderSeq) return;
     const eps = kids.filter((k) => k.type === 'episode').sort((a, b) => (a.index || 0) - (b.index || 0));
-    showList(eps.map((ep) => ({
-      key: 'ep:' + ep.ratingKey,
-      label: (ep.index != null ? ep.index + '. ' : '') + ep.title,
-      sub: ep.duration ? fmtDur(ep.duration) : '',
-      onSelect: () => navigate({ screen: 'player', id: ep.ratingKey, kind: 'episode' }),
-    })), 'No episodes found.');
+    showList(eps.map((ep) => {
+      const sec = resumeSeconds(ep);
+      return {
+        key: 'ep:' + ep.ratingKey,
+        label: (ep.index != null ? ep.index + '. ' : '') + ep.title,
+        sub: sec ? 'Resume ' + fmtTime(sec) + ' of ' + fmtTime((ep.duration || 0) / 1000)
+          : (ep.viewCount > 0 && !viewOffsetOf(ep) ? 'Watched' : (ep.duration ? fmtDur(ep.duration) : '')),
+        // part-way through: ask whether to resume; otherwise just play
+        onSelect: () => (sec ? navigate({ screen: 'episode', id: ep.ratingKey, title: ep.title })
+          : navigate({ screen: 'player', id: ep.ratingKey, kind: 'episode', resume: 0 })),
+      };
+    }), 'No episodes found.');
     focusInitial();
   }
 
@@ -1118,7 +1261,7 @@
     P.stallTimes = [];
     P.rebuf = false;
     clearTimeout(P.rebufTimer);
-    P.forceStart = true;      // a fresh start always begins at 0:00 (see fixStart)
+    P.forceStart = !(state.resume > 1);      // a fresh start begins at 0:00 (see fixStart); a resume begins where it was left
     P.guardUntil = 0;
     P.startFix = 0;
     P.pending = null;
@@ -1135,7 +1278,7 @@
       if (P.session === session && d && d.text) P.decisionText = d.text;
     });
 
-    begin(0);
+    begin(state.resume > 1 ? state.resume : 0);
   }
 
   function armWatchdog(my) {
@@ -1380,6 +1523,7 @@
     const session = P.session;
     let pos = 0;
     try { pos = position(); } catch (e) { /* ignore */ }
+    if (item && pos > 0) progressMemory.set(String(item.ratingKey), { ms: P.dur > 0 && pos >= P.dur * 0.95 ? 0 : pos * 1000, t: Date.now() });
     P.item = null;
     P.streamSeq += 1;
     try { video.pause(); } catch (e) { /* ignore */ }

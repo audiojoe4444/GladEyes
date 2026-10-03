@@ -12,7 +12,7 @@
   <meta name="referrer" content="no-referrer">
   <!-- PNG favicon (>52px): SVG favicons are a known issue on the glasses -->
   <link rel="icon" type="image/png" sizes="128x128" href="icons/favicon.png">
-  <link rel="stylesheet" href="css/style.css?v=10">
+  <link rel="stylesheet" href="css/style.css?v=11">
 </head>
 <body>
   <div id="app" class="app-shell">
@@ -27,6 +27,12 @@
     </header>
 
     <main id="screen" class="screen"></main>
+
+    <!-- Page up / page down for long lists (shown only when a list is longer than about a screen) -->
+    <nav id="rail" class="rail" aria-label="Page through the list" hidden>
+      <button id="r-up" class="rail-btn" type="button" aria-label="Page up"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M5 15l7-7 7 7"/></svg></button>
+      <button id="r-down" class="rail-btn" type="button" aria-label="Page down"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M5 9l7 7 7-7"/></svg></button>
+    </nav>
 
     <!-- Fullscreen player (shown only while playing) -->
     <section id="player" class="player" aria-label="Video player" hidden>
@@ -62,9 +68,9 @@
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
   <noscript>This app needs JavaScript.</noscript>
 
-  <script src="config.js?v=10"></script>
-  <script src="js/backup.js?v=10"></script>
-  <script src="js/plex.js?v=10"></script>
-  <script src="js/app.js?v=10"></script>
+  <script src="config.js?v=11"></script>
+  <script src="js/backup.js?v=11"></script>
+  <script src="js/plex.js?v=11"></script>
+  <script src="js/app.js?v=11"></script>
 </body>
 </html>

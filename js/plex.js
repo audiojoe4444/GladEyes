@@ -151,7 +151,7 @@
       const chrome = (navigator.userAgent.match(/Chrome\/(\d+)/) || [])[1] || '120';
       return {
         'X-Plex-Product': 'GladEyes',
-        'X-Plex-Version': '10.0.0',
+        'X-Plex-Version': '11.0.0',
         'X-Plex-Client-Identifier': this.clientId,
         // "Chrome" makes the server apply its built-in Chrome client profile (H.264/AAC etc.).
         'X-Plex-Platform': 'Chrome',
@@ -574,6 +574,27 @@
     async metadata(id) {
       const mc = await this.json('/library/metadata/' + encodeURIComponent(id));
       return (mc.Metadata || [])[0] || null;
+    },
+    /** Movies that are part-way through, most recently watched first. */
+    async continueWatching(sectionId, n) {
+      const mc = await this.json('/library/sections/' + encodeURIComponent(sectionId) + '/all', Object.assign({
+        inProgress: 1, sort: 'lastViewedAt:desc', 'X-Plex-Container-Start': 0, 'X-Plex-Container-Size': 60,
+      }, TRIM));
+      // (if a server ignores the inProgress filter, the check here still keeps only films that really are part-way)
+      return (mc.Metadata || []).filter((m) => m.viewOffset > 0 && (!m.duration || m.viewOffset < m.duration * 0.95)).slice(0, n || 10);
+    },
+    async recentlyAdded(sectionId, n) {
+      const size = n || 10;
+      const mc = await this.json('/library/sections/' + encodeURIComponent(sectionId) + '/recentlyAdded', Object.assign({
+        'X-Plex-Container-Start': 0, 'X-Plex-Container-Size': size,
+      }, TRIM));
+      return (mc.Metadata || []).slice(0, size);
+    },
+    collections(sectionId) {
+      return this.pages('/library/sections/' + encodeURIComponent(sectionId) + '/collections', TRIM, { size: 300 });
+    },
+    collectionItems(id) {
+      return this.pages('/library/collections/' + encodeURIComponent(id) + '/children', TRIM, { size: 300 });
     },
     children(id) {
       return this.pages('/library/metadata/' + encodeURIComponent(id) + '/children', TRIM, { size: 500 });

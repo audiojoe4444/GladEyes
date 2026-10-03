@@ -1,4 +1,4 @@
-# GladEyes (v10)
+# GladEyes (v11)
 
 ![GladEyes logo](icons/logo-512.png)
 
@@ -35,15 +35,31 @@ Use the middle tap on the glasses for the web app menu (**Restart / Resume / Per
 
 ## Using it
 
-- Libraries list, then a list of titles in alphabetical order. A **Back** button is at the top left of every screen: move
-  **Up** past the first row, or **Left** past the list's edge, to select it.
-- **Big libraries** show a strip of letters (`# A B C ... Z`) above the list. **Right** from anywhere in the list moves to
-  the **next letter** and **Left** to the **previous** one (the cursor lands on that letter in the strip; press **Down**
-  to go into the list). Each letter shows 100 titles at a time, with a **Show more** row at the end.
-- A movie opens a page with its poster, description and a **Play** button. A TV show opens its seasons, then the episodes.
+- A **Back** button is at the top left of every screen: move **Up** past the first row, or **Left** past the list's edge,
+  to select it.
+- **Movie libraries open a menu:**
+  - **Continue Watching**: the ten films you are part-way through, most recently watched first.
+  - **Recently Added**: the ten newest films.
+  - **Library**: everything, A to Z.
+  - **Collections**: your Plex collections (Sherlock Holmes, Marvel, Thin Man...). Pick one to see its films in the order
+    set up in Plex. (Set `movieMenu: false` in `config.js` to go straight to the A-Z list.) TV libraries open to their
+    list as before.
+- **Big libraries** show a strip of letters (`# A B C ... Z`) above the list. Each letter shows 100 titles at a time, with
+  a **Show more** row at the end.
+  - **Left** from a title steps to the **previous letter**. **Right** steps to the **next letter**, with the cursor landing
+    on that letter in the strip (press **Down** to go into the list).
+  - **Long lists have page buttons**: two thin buttons on the right edge (page up / page down). **Right** from a title
+    moves onto them (so in a long list, press **Right** twice to step to the next letter: once to reach the buttons,
+    again to move on); **Up/Down** choose a button, **Select** moves the list by a screenful, **Left** goes back to the titles.
+    Paging down past the end of a hundred titles reveals the next hundred. Short lists have no buttons, and **Right**
+    still steps straight to the next letter.
+- **Resume or start over:** open a film (or an episode) you are part-way through and the page offers **Resume** (with the
+  time and a small progress bar) and **Start from beginning**. Anything you watch here is reported back to Plex, so you can
+  carry on from another device, and what you started on another device shows up here. A film you haven't started just has **Play**.
+  In a season's list, part-watched episodes show "Resume 12:30 of 24:00" and watched ones say "Watched".
+- A TV show opens its seasons, then the episodes.
 - While playing, **Select** opens the controls: **-15s / Play-Pause / +15s / Exit**. A small **Controls** pill at the bottom
   of the picture is what you select. The line under the progress bar shows how it is playing (method, quality, buffer, stalls).
-- Every play starts from the beginning.
 
 **Settings** (bottom of the Libraries screen) shows who is signed in, which server and how you're connected, and has
 **Change server**, **Reconnect**, **Diagnostics** and **Sign out**.
@@ -138,6 +154,7 @@ Everything is plain HTML, CSS and JavaScript: no build step.
 
 | Setting | What it does |
 |---|---|
+| `movieMenu` | `true` (default): movie libraries open the Continue Watching / Recently Added / Library / Collections menu. `false`: straight to the A-Z list |
 | `libraryOrder` | Library names to list first. Every other movie/TV library follows in the server's order. `[]` = server order |
 | `playback.maxVideoBitrate` | Where the very first film starts (kbps; default 600, which is 480x270). After that the app adjusts and remembers |
 | `playback.relayBitrate` | Where a first-ever film starts when connected through Plex's relay (default 400) |
