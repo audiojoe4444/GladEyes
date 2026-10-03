@@ -398,3 +398,12 @@ body.mode-player .topbar {
   background: #0d1216; color: var(--text); font: inherit; font-size: 1.1rem;
 }
 .field:focus { outline: 3px solid var(--accent); outline-offset: 2px; }
+
+/* ---------- toast (short messages such as "Restored from GitHub") ---------- */
+.toast {
+  position: fixed; inset-inline: 1rem; inset-block-end: 1rem; z-index: 50;
+  padding: .7rem 1rem;
+  border: 1px solid var(--accent); border-radius: var(--r-lg);
+  background: rgba(10, 58, 51, .95); color: #fff;
+  font-size: 1.05rem; text-align: center;
+}

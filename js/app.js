@@ -15,13 +15,14 @@
   'use strict';
 
   const APP_NAME = 'GladEyes';
-  const VERSION = '8';
+  const VERSION = '10';
   const cfg = window.PLEX_CONFIG || {};
   const pb = Object.assign({
-    strategy: 'auto', hlsEngine: 'auto', container: 'mp4', videoResolution: '480x270', maxVideoBitrate: 600,
+    strategy: 'auto', hlsEngine: 'auto', container: 'mp4', maxVideoBitrate: 600,
     forceTranscode: true, seekStepSeconds: 15, controlsHideMs: 6000, startTimeoutSeconds: 45, hlsJsUrl: '',
     rebufferSeconds: 10, rebufferMaxSeconds: 25, autoLowerQuality: true,
-    relayResolution: '426x240', relayBitrate: 400,
+    relayBitrate: 400,
+    rememberQuality: true, autoRaiseQuality: true, autoRaiseUpToKbps: 1200, raiseAfterSeconds: 150, raiseBufferSeconds: 4,
   }, cfg.playback || {});
   const STEP = pb.seekStepSeconds;
   const MAX_INDEX = 4;     // host keeps at most 5 history entries (indexes 0..4)
@@ -103,6 +104,12 @@
     return { add, flush, clear, last: () => last, now: () => buf.slice() };
   })();
 
+  // The encrypted GitHub backup (js/backup.js). Switched on by ?sync=KEY in the app's address.
+  const Backup = window.Backup || {
+    enabled: false, hasLocal() { return true; }, noted() {}, flush() { return Promise.resolve(); },
+    describe() { return ''; }, restoreIfEmpty() { return Promise.resolve('off'); }, afterBoot() {},
+  };
+
   // ---------- elements ----------
   const screenEl = $('#screen');
   const topbar = $('#topbar');
@@ -123,6 +130,21 @@
   const bPlay = $('#b-play');
   const bFwd = $('#b-fwd');
   const bExit = $('#b-exit');
+  const toastEl = $('#toast');
+  let toastTimer = 0;
+  function toast(text) {
+    toastEl.textContent = text;
+    toastEl.hidden = false;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => { toastEl.hidden = true; }, 5500);
+  }
+  Backup.onToast = toast;
+  Backup.onStatus = (text) => {      // keep any visible backup line up to date
+    const a = document.getElementById('backup-note');
+    const b = document.getElementById('st-backup');
+    if (a) a.textContent = text;
+    if (b) b.textContent = text;
+  };
   const brand = $('#brand');
   const pstat = $('#pstat');
 
@@ -364,7 +386,7 @@
     const host = (function () { try { return new URL(Plex.server).host; } catch (x) { return Plex.server; } })();
     const buttons = [{ label: 'Try again', primary: true, run: () => render(current) }];
     const settings = { label: 'Settings', run: () => navigate({ screen: 'settings' }) };
-    const signInAgain = { label: 'Sign in again', primary: true, run: () => { Plex.signOut(); resetCaches(); goHome(); } };
+    const signInAgain = { label: 'Sign in again', primary: true, run: () => { Plex.signOut(); Backup.flush(); resetCaches(); goHome(); } };
     if (e && e.kind === 'auth') {
       title = 'Plex rejected the sign-in';
       msg = 'Your saved sign-in is no longer valid.';
@@ -380,7 +402,7 @@
       title = 'No Plex server found';
       msg = 'Your Plex account doesn\u2019t have a Plex Media Server that this app can use.';
       detail = 'Check you signed in with the right account, and that the server is signed in to it.';
-      buttons.push({ label: 'Sign out', run: () => { Plex.signOut(); resetCaches(); goHome(); } });
+      buttons.push({ label: 'Sign out', run: () => { Plex.signOut(); Backup.flush(); resetCaches(); goHome(); } });
     } else if (e && (e.kind === 'network' || e.kind === 'timeout')) {
       title = e.kind === 'timeout' ? 'Your Plex server isn\u2019t answering' : 'Can\u2019t reach your Plex server';
       msg = 'Server: ' + host;
@@ -467,6 +489,7 @@
     }
     const where = { local: 'your home network', remote: 'a remote connection', relay: 'Plex relay (slow, so video quality is lowered)' }[Plex.connType];
     if (where) screenEl.append(h('p', { class: 'note' }, 'Connected via ' + where + (Plex.serverName ? ' \u00B7 ' + Plex.serverName : '')));
+    if (Backup.enabled) screenEl.append(h('p', { class: 'note', id: 'backup-note' }, Backup.describe()));
     screenEl.append(h('p', { class: 'note note-ver' }, APP_NAME + ' v' + VERSION),
       h('button', { class: 'btn btn-quiet', type: 'button', 'data-key': 'settings', onclick: () => navigate({ screen: 'settings' }) }, 'Settings'));
     focusInitial();
@@ -816,7 +839,17 @@
     try { host = new URL(Plex.server).host; } catch (e) { /* ignore */ }
     const rows = [];
     if (Plex.accountToken) rows.push({ key: 'st:server', label: 'Change server', sub: Plex.serverName || 'Choose which Plex server to use', onSelect: () => navigate({ screen: 'servers' }) });
+    if (Backup.enabled) rows.push({ key: 'st:backup', label: 'Back up now', sub: 'Save your sign-in and settings to GitHub', onSelect: () => { Backup.flush(); } });
     rows.push({ key: 'st:reconnect', label: 'Reconnect', sub: 'Test the connection again', onSelect: () => { Plex.connected = false; resetCaches(); goHome(); } });
+    const savedQ = () => Object.keys(KINDS).map((k) => { const m = loadQuality(k); return m ? KINDS[k] + ' ' + fmtLevel(LEVELS[m.lvl]) : null; }).filter(Boolean);
+    rows.push({
+      key: 'st:quality', label: 'Reset saved video quality',
+      sub: savedQ().length ? 'Saved: ' + savedQ().join(' \u00B7 ') : 'Nothing saved yet. It adjusts itself as you watch.',
+      onSelect: (ev) => {
+        Object.keys(KINDS).forEach((k) => Plex.forget('quality.' + k));
+        $('.item-sub', ev.currentTarget).textContent = 'Cleared. The next film starts at the default quality.';
+      },
+    });
     rows.push({ key: 'st:diag', label: 'Diagnostics', sub: 'What the app has been doing', onSelect: () => navigate({ screen: 'diag' }) });
     let armed = false;
     rows.push({
@@ -825,6 +858,7 @@
         if (!armed) { armed = true; $('.item-sub', ev.currentTarget).textContent = 'Select again to confirm'; return; }
         Log.add('signed out');
         Plex.signOut();
+        Backup.flush();
         resetCaches();
         goHome();
       },
@@ -834,8 +868,9 @@
     screenEl.replaceChildren(h('div', { class: 'info' },
       h('p', {}, who),
       h('p', {}, 'Server: ' + (Plex.serverName || host || 'not chosen yet') + (host && Plex.serverName ? ' (' + host + ')' : '')),
-      h('p', {}, 'Connection: ' + how)), ul);
-    screenEl.append(h('p', { class: 'note' }, APP_NAME + ' v' + VERSION + ' \u00B7 an unofficial app, not made by or connected to Plex or Meta. The app itself collects nothing; your sign-in stays on this device.'));
+      h('p', {}, 'Connection: ' + how),
+      h('p', { id: 'st-backup' }, Backup.enabled ? Backup.describe() : 'Backup: off. To switch it on, add ?sync=YOUR-KEY to this app\u2019s address (see the README).')), ul);
+    screenEl.append(h('p', { class: 'note' }, APP_NAME + ' v' + VERSION + ' \u00B7 an unofficial app, not made by or connected to Plex or Meta. The app itself collects nothing; your sign-in stays on this device' + (Backup.enabled ? ', plus an encrypted backup in your own GitHub account.' : '.')));
     if (Plex.viaLink) screenEl.append(h('p', { class: 'note' }, 'Your launch link contains a token, so this app will sign in again on its next start. To stop that, edit the link in the Meta AI app and remove the #token part.'));
     screenEl.scrollTop = 0;
     focusInitial();
@@ -893,28 +928,59 @@
   //  If all fail, the screen says what each attempt did and what the server replied.
   // =====================================================================
   const P = {
-    item: null, session: '', mode: '', ladder: [], idx: 0, errors: [], qs: [], q: 0,
+    item: null, session: '', mode: '', ladder: [], idx: 0, errors: [],
+    lvl: 3, bad: -1, kind: 'local', fromMemory: false, raisedAt: 0, smoothSince: 0,
     offset: 0, base: 0, baseSet: false, dur: 0, streamSeq: 0, pending: null, started: false,
     needAdvance: false, advFrom: 0, forceStart: false, guardUntil: 0, startFix: 0, stalls: 0, stallTimes: [], rebuf: false, rebufTimer: 0,
     guardT0: 0, hideTimer: 0, tick: 0, watchdog: 0, hls: null, decisionText: '',
   };
   const MODE_NAME = { 'hls-native': 'HLS', 'hls-js': 'HLS (hls.js)', mp4: 'MP4' };
-  // If playback keeps stalling, the app steps down through these (only ones below your configured quality are used).
-  const QUALITY = [{ r: '854x480', b: 2000 }, { r: '640x360', b: 1200 }, { r: '480x270', b: 700 }, { r: '426x240', b: 400 }, { r: '320x180', b: 250 }];
+  // The quality steps, best first. The app moves along these by itself (down when playback keeps stalling, up when it has
+  // been smooth for a while) and remembers the step that worked for each kind of connection, so the next film starts
+  // in the right place. Only `maxVideoBitrate` / `relayBitrate` in config.js decide where a first-ever play starts.
+  const LEVELS = [
+    { r: '854x480', b: 2000 }, { r: '640x360', b: 1200 }, { r: '480x270', b: 800 }, { r: '480x270', b: 600 },
+    { r: '448x252', b: 500 }, { r: '426x240', b: 400 }, { r: '384x216', b: 320 }, { r: '320x180', b: 250 },
+  ];
+  const levelFor = (kbps) => { const i = LEVELS.findIndex((l) => l.b <= kbps); return i < 0 ? LEVELS.length - 1 : i; };
+  const fmtLevel = (l) => l.r.replace('x', '\u00D7') + ' @ ' + l.b / 1000 + ' Mbps';
+  const BAD_TTL = 20 * 60 * 1000;     // a step that stalled is avoided for this long, then tried again (connections change)
+  const KINDS = { local: 'Home', remote: 'Remote', relay: 'Relay' };
+
+  function loadQuality(kind) {
+    try {
+      const m = JSON.parse(Plex.recall('quality.' + kind) || 'null');
+      if (!m || typeof m.l !== 'number' || m.l < 0 || m.l >= LEVELS.length) return null;
+      return { lvl: m.l, bad: (Date.now() - (m.t || 0) < BAD_TTL && typeof m.bad === 'number') ? m.bad : -1 };
+    } catch (e) { return null; }
+  }
+  function saveQuality() {
+    if (pb.rememberQuality) Plex.remember('quality.' + P.kind, JSON.stringify({ l: P.lvl, bad: P.bad, t: Date.now() }));
+  }
+  /** Where this play starts: what worked last time on this kind of connection, otherwise the configured default. */
+  function chooseStartLevel() {
+    P.kind = Plex.connType || 'local';
+    let kbps = pb.maxVideoBitrate;
+    if (P.kind === 'relay' && pb.relayBitrate && pb.relayBitrate < kbps) kbps = pb.relayBitrate;   // Plex's relay is slow
+    P.lvl = levelFor(kbps);
+    P.bad = -1;
+    P.fromMemory = false;
+    if (pb.rememberQuality) {
+      const m = loadQuality(P.kind);
+      if (m) { P.lvl = m.lvl; P.bad = m.bad; P.fromMemory = true; }
+    }
+    P.raisedAt = 0;
+    P.smoothSince = 0;
+    Log.add('quality ' + P.kind + ' starts at ' + fmtLevel(LEVELS[P.lvl]) + (P.fromMemory ? ' (saved)' : ''));
+  }
   // A 1x1 transparent picture: stops the browser drawing its own grey "play" placeholder over the black screen.
   const BLANK = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
 
   const uuid = () => (window.crypto && crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2));
   const pbFor = (protocol) => {
-    const q = P.qs[P.q] || { r: pb.videoResolution, b: pb.maxVideoBitrate };
+    const q = LEVELS[P.lvl] || LEVELS[3];
     return Object.assign({}, pb, { protocol, videoResolution: q.r, maxVideoBitrate: q.b });
   };
-  function buildQualities() {
-    let first = { r: pb.videoResolution, b: pb.maxVideoBitrate };
-    // Plex's relay is slow, so start lighter when that's how we're connected.
-    if (Plex.connType === 'relay' && pb.relayBitrate && pb.relayBitrate < first.b) first = { r: pb.relayResolution, b: pb.relayBitrate };
-    return [first].concat(pb.autoLowerQuality ? QUALITY.filter((q) => q.b < first.b) : []);
-  }
 
   function fullTitle(it) {
     if (it.type === 'episode') {
@@ -978,10 +1044,9 @@
     const pos = P.pending != null ? P.pending : position();
     if (P.dur > 0) fill.style.width = Math.min(100, (pos / P.dur) * 100) + '%';
     ptime.textContent = fmtTime(pos) + (P.dur > 0 ? ' / ' + fmtTime(P.dur) : '');
-    const q = P.qs[P.q];
     pstat.textContent = [
       MODE_NAME[P.mode],
-      q ? q.r.replace('x', '\u00D7') + ' @ ' + q.b / 1000 + ' Mbps' : '',
+      fmtLevel(LEVELS[P.lvl]) + (P.fromMemory ? ' (saved)' : ''),
       'buffer ' + Math.round(bufferedAhead()) + 's',
       'stalls ' + P.stalls,
       P.startFix ? 'start fixed (was ' + P.startFix + 's)' : '',
@@ -1048,8 +1113,7 @@
     P.errors = [];
     P.ladder = buildLadder();
     P.idx = 0;
-    P.qs = buildQualities();
-    P.q = 0;
+    chooseStartLevel();
     P.stalls = 0;
     P.stallTimes = [];
     P.rebuf = false;
@@ -1106,7 +1170,7 @@
     P.started = false;
     P.needAdvance = false;
     if (pos > 1) { P.guardUntil = 0; P.forceStart = false; }   // resuming mid-movie (after a fallback or quality change), not a fresh start
-    Log.add('start ' + mode + ' ' + ((P.qs[P.q] || {}).r || '?') + ' @' + ((P.qs[P.q] || {}).b || '?') + (pos > 1 ? ' from ' + fmtTime(pos) : ''));
+    Log.add('start ' + mode + ' ' + LEVELS[P.lvl].r + ' @' + LEVELS[P.lvl].b + (pos > 1 ? ' from ' + fmtTime(pos) : ''));
     setLoading(true, message || (P.idx > 0 ? 'Trying another way (' + MODE_NAME[mode] + ')\u2026' : 'Starting the transcoder\u2026'));
     armWatchdog(my);
 
@@ -1230,7 +1294,10 @@
     P.stalls += 1;
     Log.add('stall ' + P.stalls + ' buf ' + Math.round(bufferedAhead()) + 's');
     P.stallTimes = P.stallTimes.filter((t) => now - t < 90000).concat(now);
-    if (P.stallTimes.length >= 3 && P.q + 1 < P.qs.length) { stepDown(); return; }
+    P.smoothSince = now;
+    // A stall soon after we raised the quality means that step is too much for this connection: go straight back.
+    const raiseFailed = P.raisedAt && now - P.raisedAt < 60000;
+    if (pb.autoLowerQuality && (raiseFailed || P.stallTimes.length >= 3) && P.lvl + 1 < LEVELS.length) { stepDown(); return; }
     if (P.dur > 0 && P.dur - position() < 20) return;            // nearly at the end: just let it finish
     // Browsers restart the instant a sliver of data arrives, which gives stop-start every few seconds.
     // With hls.js (where this app controls buffering) wait until several seconds are stored up, then resume.
@@ -1260,12 +1327,40 @@
 
   function stepDown() {
     const pos = position();
-    P.q += 1;
+    P.bad = Math.max(P.bad, P.lvl);       // this step (and anything better) stalled here
+    P.lvl += 1;
+    P.fromMemory = false;
     P.stallTimes = [];
+    P.raisedAt = 0;
+    P.smoothSince = 0;
+    saveQuality();
+    Log.add('quality down to ' + fmtLevel(LEVELS[P.lvl]));
     const old = P.session;
     P.session = uuid();                 // fresh transcode session at the lower quality
     Plex.stop(old);
     begin(pos, 'Lowering quality to keep it smooth\u2026');
+  }
+
+  /** After a good stretch without stalls, try one step up. (Never while the controls are open, or near the end.) */
+  function maybeRaise() {
+    if (!pb.autoRaiseQuality || !P.item || !P.started || P.needAdvance || video.paused || P.rebuf || !ctrl.hidden) return;
+    const target = P.lvl - 1;
+    if (target < 0 || target <= P.bad || LEVELS[target].b > pb.autoRaiseUpToKbps) return;
+    if (!P.smoothSince || Date.now() - P.smoothSince < pb.raiseAfterSeconds * 1000) return;
+    if (bufferedAhead() < pb.raiseBufferSeconds) return;
+    if (P.dur > 0 && P.dur - position() < 120) return;
+    const pos = position();
+    P.lvl = target;
+    P.fromMemory = false;
+    P.raisedAt = Date.now();
+    P.smoothSince = Date.now();
+    P.stallTimes = [];
+    saveQuality();
+    Log.add('quality up to ' + fmtLevel(LEVELS[P.lvl]));
+    const old = P.session;
+    P.session = uuid();
+    Plex.stop(old);
+    begin(pos, 'Raising quality\u2026');
   }
 
   function heartbeat() {
@@ -1273,6 +1368,7 @@
     Plex.ping(P.session);
     Plex.timeline(P.item, video.paused && !P.rebuf ? 'paused' : 'playing', position() * 1000, P.dur * 1000, P.session);
     Log.add('hb ' + fmtTime(position()) + ' buf ' + Math.round(bufferedAhead()) + 's ' + (video.paused ? 'paused' : 'playing') + ' stalls ' + P.stalls);
+    maybeRaise();
   }
 
   /** Stop everything that belongs to the current playback. Cheap, and safe to call at any time. */
@@ -1366,6 +1462,7 @@
     if (P.needAdvance && !video.paused && Math.abs(video.currentTime - P.advFrom) > 0.25) {
       P.needAdvance = false;
       P.started = true;
+      P.smoothSince = Date.now();
       clearTimeout(P.watchdog);
       P.pending = null;
       setLoading(false);
@@ -1399,16 +1496,28 @@
   bExit.addEventListener('click', () => goBack('exit'));   // back to the movie's splash / the episode list
 
   // ---------- boot ----------
-  try { history.scrollRestoration = 'manual'; } catch (e) { /* ignore */ }
-  creds = Plex.init();
-  const saved = history.state;
-  let start = ROOT;
-  if (saved && saved.screen) {
-    start = saved.screen === 'player' ? (saved.up || ROOT) : saved;   // restarted while playing: return to the movie's page
-    if (start !== saved) { try { history.replaceState(start, ''); } catch (e) { /* ignore */ } }
-  } else {
-    history.replaceState(ROOT, '');
+  async function boot() {
+    try { history.scrollRestoration = 'manual'; } catch (e) { /* ignore */ }
+    // If the glasses have lost this app's saved data (an update can do that), get it back from the GitHub backup first.
+    if (Backup.enabled && !Backup.hasLocal()) {
+      screenEl.replaceChildren(h('div', { class: 'status', role: 'status' },
+        h('span', { class: 'spinner', 'aria-hidden': 'true' }), h('span', {}, 'Restoring your backup\u2026')));
+      const result = await Backup.restoreIfEmpty(10000);
+      Log.add('backup restore: ' + result);
+      if (result === 'restored') toast('Restored your sign-in and settings from GitHub');
+    }
+    creds = Plex.init();
+    const saved = history.state;
+    let start = ROOT;
+    if (saved && saved.screen) {
+      start = saved.screen === 'player' ? (saved.up || ROOT) : saved;   // restarted while playing: return to the movie's page
+      if (start !== saved) { try { history.replaceState(start, ''); } catch (e) { /* ignore */ } }
+    } else {
+      history.replaceState(ROOT, '');
+    }
+    Log.add('start app v' + VERSION + ' at ' + start.screen + (Backup.enabled ? ' (backup on)' : ''));
+    render(start);
+    Backup.afterBoot();
   }
-  Log.add('start app v' + VERSION + ' at ' + start.screen);
-  render(start);
+  boot();
 })();

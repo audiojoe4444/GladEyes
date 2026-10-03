@@ -1,4 +1,4 @@
-# GladEyes (v9)
+# GladEyes (v10)
 
 ![GladEyes logo](icons/logo-512.png)
 
@@ -75,12 +75,46 @@ after a problem to see a log of what the app was doing. Things to try: lower `ma
 `config.js` (for example `400`), check the movie plays in Plex Web, and check your server isn't struggling to convert
 video (Plex Web > Settings > Status > Dashboard shows the transcode speed while playing).
 
+## Backing up your sign-in (optional)
+
+A glasses software update can wipe a web app's saved data, which would sign you out. GladEyes can keep an **encrypted
+backup in your own GitHub account** and restore it by itself the next time you open the app.
+
+**Switch it on (once, from your phone):**
+1. On github.com: your profile picture > **Settings** > **Developer settings** > **Personal access tokens** > **Tokens
+   (classic)** > **Generate new token (classic)**. Note: `GladEyes backup`. Expiration: **No expiration**. Tick **only
+   `gist`**. Click **Generate token** and copy the key (it starts `ghp_` and is shown only once).
+2. In the Meta AI app: **App Settings > Apps > Web Apps**, edit GladEyes so its address ends with `?sync=ghp_yourkey`
+   (use `&sync=ghp_yourkey` if the address already contains a `?`). Save.
+3. Open GladEyes. The bottom of the Libraries screen should say **Backed up to GitHub · just now**.
+
+If you use other glasses apps that have the same backup feature, you can use the **same key** for all of them; each app
+saves to its own separate gist.
+
+**What it does**
+- Saves your Plex sign-in, your chosen server and addresses, and your preferences (remembered video quality, last letter
+  per library). Library lists and logs are not saved. Changes are saved within a few seconds (small, frequent ones at
+  most once a minute), and again when you leave the app.
+- Everything is **encrypted on the glasses** before it is sent (AES-256, with a key made from your GitHub key). The gist
+  only ever holds scrambled data. It is a private ("secret") gist called **GladEyes backup (encrypted)**.
+- If the glasses have lost their data, the next launch restores it and shows a short message. If another device saved a
+  newer backup, GladEyes picks it up at launch and restarts itself.
+- **Sign out** updates the backup too, so a later wipe doesn't sign you back in.
+- The key lives **only in the app's address in the Meta AI app**: never in the code or the repository, and never stored on
+  the glasses. Settings shows the backup status. If it says **made with a different key**, the backup was created with
+  another key and GladEyes will not overwrite it (delete that gist on gist.github.com to start fresh). **Key not
+  accepted** means GitHub refused the key; **waiting for a connection** means GitHub couldn't be reached.
+- **Treat the address like a password.** A key with the `gist` permission can read and change all of your gists. If it
+  leaks, delete it under GitHub's token settings and make a new one.
+
 ## Privacy
 
 - GladEyes itself collects **nothing**: no analytics, no accounts of its own, no tracking.
 - Your Plex sign-in is stored **only on your glasses** (in the browser's local storage). **Sign out** in Settings removes it.
-- The app talks to: **plex.tv** (sign-in and finding your server), **your own Plex server**, and, only if needed, a
-  public copy of the hls.js video library (unless its file is hosted alongside the app; see below).
+  If you switch on the optional backup above, an **encrypted** copy is also kept in your own GitHub account.
+- The app talks to: **plex.tv** (sign-in and finding your server), **your own Plex server**, **api.github.com** (only if
+  you switch on the backup), and, only if needed, a public copy of the hls.js video library (unless its file is hosted
+  alongside the app; see below).
 - The page itself is hosted on GitHub Pages, which keeps ordinary web logs like any website.
 
 ## Reporting a problem
@@ -125,6 +159,7 @@ itself if one fails. Playback starts at 0:00; the app steps back to the start if
 ```
 index.html                                page shell
 config.js                                 settings (no secrets)
+js/backup.js                              optional encrypted GitHub backup and restore
 js/plex.js                                Plex API: sign-in by code, finding the server, library loading and cache, stream URLs
 js/app.js                                 screens, navigation, letter strip, player, settings, diagnostics
 js/hls.min.js                             optional: your own copy of hls.js (see above)

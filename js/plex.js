@@ -20,10 +20,12 @@
     set(k, v) {
       mem[k] = v;
       try { window.localStorage.setItem(k, v); } catch (e) { /* ignore */ }
+      if (window.Backup) window.Backup.noted(k);
     },
     del(k) {
       delete mem[k];
       try { window.localStorage.removeItem(k); } catch (e) { /* ignore */ }
+      if (window.Backup) window.Backup.noted(k);
     },
   };
   const readJson = (k) => { try { return JSON.parse(store.get(k) || 'null'); } catch (e) { return null; } };
@@ -71,10 +73,14 @@
     if (out.token || out.server) {
       try {
         const u = new URL(location.href);
-        u.hash = '';
         u.searchParams.delete('token');
         u.searchParams.delete('server');
-        history.replaceState(history.state, '', u.pathname + u.search);
+        const hp = new URLSearchParams(location.hash.replace(/^#\??/, ''));
+        hp.delete('token');
+        hp.delete('server');
+        const rest = hp.toString();                         // anything else in the fragment (e.g. sync=...) stays
+        u.hash = rest ? '#' + rest : '';
+        history.replaceState(history.state, '', u.pathname + u.search + u.hash);
       } catch (e) { /* ignore */ }
     }
     return out;
@@ -139,12 +145,13 @@
     /** Tiny key/value memory on the device (last letter chosen per library, etc.). */
     remember(k, v) { store.set('plex.pref.' + k, String(v)); },
     recall(k) { return store.get('plex.pref.' + k); },
+    forget(k) { store.del('plex.pref.' + k); },
 
     identityBase() {
       const chrome = (navigator.userAgent.match(/Chrome\/(\d+)/) || [])[1] || '120';
       return {
         'X-Plex-Product': 'GladEyes',
-        'X-Plex-Version': '8.0.0',
+        'X-Plex-Version': '10.0.0',
         'X-Plex-Client-Identifier': this.clientId,
         // "Chrome" makes the server apply its built-in Chrome client profile (H.264/AAC etc.).
         'X-Plex-Platform': 'Chrome',

@@ -8,9 +8,11 @@
   <meta name="application-name" content="GladEyes">
   <meta name="mrbd-web-app-capable" content="yes">
   <meta name="theme-color" content="#000000">
+  <!-- the address can carry the backup key (?sync=...): never pass it on to another site -->
+  <meta name="referrer" content="no-referrer">
   <!-- PNG favicon (>52px): SVG favicons are a known issue on the glasses -->
   <link rel="icon" type="image/png" sizes="128x128" href="icons/favicon.png">
-  <link rel="stylesheet" href="css/style.css?v=9">
+  <link rel="stylesheet" href="css/style.css?v=10">
 </head>
 <body>
   <div id="app" class="app-shell">
@@ -57,10 +59,12 @@
     </section>
 
   </div>
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
   <noscript>This app needs JavaScript.</noscript>
 
-  <script src="config.js?v=9"></script>
-  <script src="js/plex.js?v=9"></script>
-  <script src="js/app.js?v=9"></script>
+  <script src="config.js?v=10"></script>
+  <script src="js/backup.js?v=10"></script>
+  <script src="js/plex.js?v=10"></script>
+  <script src="js/app.js?v=10"></script>
 </body>
 </html>
