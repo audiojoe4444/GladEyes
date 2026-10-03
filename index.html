@@ -12,7 +12,7 @@
   <meta name="referrer" content="no-referrer">
   <!-- PNG favicon (>52px): SVG favicons are a known issue on the glasses -->
   <link rel="icon" type="image/png" sizes="128x128" href="icons/favicon.png">
-  <link rel="stylesheet" href="css/style.css?v=11">
+  <link rel="stylesheet" href="css/style.css?v=12">
 </head>
 <body>
   <div id="app" class="app-shell">
@@ -24,6 +24,12 @@
       </button>
       <svg id="brand" class="brand" viewBox="0 0 64 64" aria-hidden="true" focusable="false"><path class="b-brow" d="M5 28 L16 12 L27 28"/><path class="b-brow" d="M37 28 L48 12 L59 28"/><path class="b-eye" d="M8 53 Q16 36 24 53"/><path class="b-eye" d="M40 53 Q48 36 56 53"/></svg>
       <h1 id="title" class="topbar-title">GladEyes</h1>
+      <!-- Top right while the playback controls are open: screen brightness (this app only) and, if the glasses report it, battery -->
+      <div id="hud" class="hud" hidden>
+        <button id="b-bright" class="hud-btn" type="button" aria-label="Screen brightness"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="4.2"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M18.7 5.3l-2.1 2.1M7.4 16.6l-2.1 2.1"/></svg><span id="bright-val">100%</span></button>
+        <span id="batt" class="batt" hidden aria-label="Battery"><svg viewBox="0 0 30 14" aria-hidden="true" focusable="false"><rect class="batt-body" x="1" y="1" width="25" height="12" rx="3"/><rect class="batt-nub" x="27" y="4.5" width="2.4" height="5" rx="1"/><rect id="batt-fill" class="batt-fill" x="3.2" y="3.2" width="20.6" height="7.6" rx="1.5"/><path class="batt-bolt" d="M15.5 2.4 L10.5 7.6 H13.6 L12.6 11.8 L18 6.2 H14.8 Z"/></svg><span id="batt-val">--%</span></span>
+      </div>
+
     </header>
 
     <main id="screen" class="screen"></main>
@@ -66,11 +72,13 @@
 
   </div>
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+  <!-- in-app dimming: a black layer over everything (the glasses' own brightness can't be set from a web app) -->
+  <div id="dim" class="dim" aria-hidden="true"></div>
   <noscript>This app needs JavaScript.</noscript>
 
-  <script src="config.js?v=11"></script>
-  <script src="js/backup.js?v=11"></script>
-  <script src="js/plex.js?v=11"></script>
-  <script src="js/app.js?v=11"></script>
+  <script src="config.js?v=12"></script>
+  <script src="js/backup.js?v=12"></script>
+  <script src="js/plex.js?v=12"></script>
+  <script src="js/app.js?v=12"></script>
 </body>
 </html>

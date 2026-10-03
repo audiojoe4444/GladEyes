@@ -1,4 +1,4 @@
-# GladEyes (v11)
+# GladEyes (v12)
 
 ![GladEyes logo](icons/logo-512.png)
 
@@ -35,6 +35,9 @@ Use the middle tap on the glasses for the web app menu (**Restart / Resume / Per
 
 ## Using it
 
+- **Where the cursor lands:** on any page, including when you come **Back** to it, the cursor goes to the **top-most
+  button or menu item**, never to the Back button and never to where it was last time. (So going Back to a long list puts
+  you at the top of that letter's list.)
 - A **Back** button is at the top left of every screen: move **Up** past the first row, or **Left** past the list's edge,
   to select it.
 - **Movie libraries open a menu:**
@@ -58,6 +61,13 @@ Use the middle tap on the glasses for the web app menu (**Restart / Resume / Per
   carry on from another device, and what you started on another device shows up here. A film you haven't started just has **Play**.
   In a season's list, part-watched episodes show "Resume 12:30 of 24:00" and watched ones say "Watched".
 - A TV show opens its seasons, then the episodes.
+- While the controls are open, the **top right** shows a **brightness** button and, **if your glasses' browser reports it**,
+  the **battery** percentage (with a charging bolt, and in a warning colour when low). **Right** from Back, or **Up** from
+  Exit, reaches the brightness button; **Select** steps it through 100, 80, 60, 40 and 25%. **Brightness here dims this app
+  only**: a web app cannot change the glasses' own brightness (Meta's web-app documentation lists no way to), so that
+  still has to be set on the glasses. Dimming also works on every other screen, and **Settings > Brightness** changes it
+  there, so you are never stuck dim. The battery icon is hidden when the browser doesn't offer battery information
+  (Settings > Diagnostics says which).
 - While playing, **Select** opens the controls: **-15s / Play-Pause / +15s / Exit**. A small **Controls** pill at the bottom
   of the picture is what you select. The line under the progress bar shows how it is playing (method, quality, buffer, stalls).
 

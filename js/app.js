@@ -15,7 +15,7 @@
   'use strict';
 
   const APP_NAME = 'GladEyes';
-  const VERSION = '11';
+  const VERSION = '12';
   const cfg = window.PLEX_CONFIG || {};
   const pb = Object.assign({
     strategy: 'auto', hlsEngine: 'auto', container: 'mp4', maxVideoBitrate: 600,
@@ -261,14 +261,24 @@
     if (current && t && t.dataset && t.dataset.key) focusMemory.set(stateKey(current), t.dataset.key);
   });
 
+  /**
+   * Landing on a page (including coming Back to it): the cursor goes to the top-most button or menu item,
+   * never to the Back button and never to wherever it was last time.
+   */
   function focusInitial() {
-    const remembered = focusMemory.get(stateKey(current));
-    let target = null;
-    if (remembered) {
-      target = Array.prototype.find.call(screenEl.querySelectorAll('[data-key]'), (n) => n.dataset.key === remembered);
-    }
-    target = target || $('[data-autofocus]', screenEl) || $('.item', screenEl) || $('button, [tabindex="0"]', screenEl) || backBtn;
-    target.focus();
+    const target = $('[data-autofocus]', screenEl) || $('.item', screenEl) || $('button, [tabindex="0"]', screenEl);
+    if (target) target.focus(); else focusScreen();
+  }
+  /** While a page is loading (or has nothing to select) keep the cursor off the Back button. */
+  function focusScreen() {
+    screenEl.setAttribute('tabindex', '-1');
+    screenEl.focus({ preventScroll: true });
+  }
+  /** Inside a page: return to the last thing the cursor was on (used when moving down from Back). */
+  function focusRemembered() {
+    const key = focusMemory.get(stateKey(current));
+    const hit = key && Array.prototype.find.call(screenEl.querySelectorAll('[data-key]'), (n) => n.dataset.key === key);
+    if (hit) hit.focus(); else focusInitial();
   }
 
   function visible(el) { return !el.hidden && el.getClientRects().length > 0; }
@@ -300,7 +310,7 @@
 
   function focusPrimary() {
     if (document.body.classList.contains('mode-player')) { bPlay.focus(); return; }
-    focusInitial();
+    focusRemembered();
   }
 
   document.addEventListener('keydown', (e) => {
@@ -314,8 +324,16 @@
       else if (e.key === 'ArrowRight' && libCtx) { e.preventDefault(); stepLetter(1); }
       return;
     }
+    if (a === bBright) {                                        // brightness button (top right, with the controls)
+      if (e.key === 'ArrowLeft') { e.preventDefault(); backBtn.focus(); }
+      else if (e.key === 'ArrowDown') { e.preventDefault(); bPlay.focus(); }
+      else if (e.key === 'ArrowUp' || e.key === 'ArrowRight') e.preventDefault();
+      return;
+    }
+    if (a === bExit && e.key === 'ArrowUp' && !hud.hidden) { e.preventDefault(); bBright.focus(); return; }
     if (a === backBtn) {
       if (e.key === 'ArrowDown') { e.preventDefault(); focusPrimary(); }
+      else if (e.key === 'ArrowRight' && !hud.hidden && document.body.classList.contains('mode-player')) { e.preventDefault(); bBright.focus(); }
       return;
     }
     if (!a || !scopeEl().contains(a)) return;
@@ -353,6 +371,53 @@
     e.preventDefault();
     backBtn.focus();
   });
+
+  // ---------- brightness (this app only) and battery ----------
+  // A web app can't set the glasses' own brightness, so "brightness" here dims this app: a black layer over everything.
+  // (Black adds no light on the glasses' display, so the picture and the controls just get dimmer.)
+  const dimEl = $('#dim');
+  const hud = $('#hud');
+  const bBright = $('#b-bright');
+  const BRIGHT_LEVELS = [100, 80, 60, 40, 25];
+  let brightness = 100;
+  function setBrightness(pct, save) {
+    brightness = pct;
+    dimEl.style.opacity = String((100 - pct) / 100);
+    $('#bright-val').textContent = pct + '%';
+    const sub = document.getElementById('st-bright-sub');
+    if (sub) sub.textContent = pct + '% (dims this app only; the glasses\u2019 own brightness is set on the glasses)';
+    if (save) Plex.remember('brightness', pct);
+  }
+  function cycleBrightness() {
+    setBrightness(BRIGHT_LEVELS[(Math.max(0, BRIGHT_LEVELS.indexOf(brightness)) + 1) % BRIGHT_LEVELS.length], true);
+    Log.add('brightness ' + brightness);
+  }
+  bBright.addEventListener('click', cycleBrightness);
+
+  // Battery: only if the glasses' browser offers the standard Battery Status API (Meta's docs don't promise it).
+  let battery = null;
+  function paintBattery() {
+    const el = $('#batt');
+    if (!battery) { el.hidden = true; return; }
+    const pct = Math.round(battery.level * 100);
+    el.hidden = false;
+    $('#batt-val').textContent = pct + '%';
+    $('#batt-fill').setAttribute('width', String(Math.max(1, 20.6 * Math.min(1, battery.level))));
+    el.classList.toggle('charging', !!battery.charging);
+    el.classList.toggle('low', pct <= 20 && !battery.charging);
+    el.setAttribute('aria-label', 'Battery ' + pct + ' percent' + (battery.charging ? ', charging' : ''));
+    const st = document.getElementById('st-battery');
+    if (st) st.textContent = 'Battery: ' + pct + '%' + (battery.charging ? ' (charging)' : '');
+  }
+  try {
+    if (navigator.getBattery) {
+      navigator.getBattery().then((b) => {
+        battery = b;
+        ['levelchange', 'chargingchange'].forEach((ev) => b.addEventListener(ev, paintBattery));
+        paintBattery();
+      }).catch(() => {});
+    }
+  } catch (e) { /* no battery information here */ }
 
   // ---------- page up / page down rail ----------
   // Shown when a list is longer than about a screen. Right from a title moves onto it; Up / Down choose a button,
@@ -483,6 +548,7 @@
     screenEl.hidden = isPlayer;
     playerEl.hidden = !isPlayer;
     topbar.hidden = isPlayer;
+    if (!isPlayer) focusScreen();            // take the cursor off Back (and off anything left behind) while the page loads
     brand.toggleAttribute('hidden', state.screen !== 'libraries');   // (SVG elements have no .hidden property, so use the attribute)
     // Screen first, then stop the video: whatever goes wrong while stopping can no longer trap you on the player.
     if (leavingPlayer) { try { detachPlayer(); } catch (e) { Log.add('stop error ' + (e && e.message)); } }
@@ -660,15 +726,7 @@
     libCtx = { state, idx, strip, rowsHost, letter };
     screenEl.scrollTop = 0;
 
-    // Coming back from a title: draw enough rows to include the one that was selected.
-    const sorted = idx.sorted(letter);
-    const remKey = focusMemory.get(stateKey(state));
-    let limit = PAGE;
-    if (remKey && remKey.indexOf('it:') === 0) {
-      const i = sorted.findIndex((r) => 'it:' + r.k === remKey);
-      if (i >= 0) limit = Math.ceil((i + 1) / PAGE) * PAGE;
-    }
-    fillRows(rowsHost, sorted, limit);
+    fillRows(rowsHost, idx.sorted(letter), PAGE);
   }
 
   /** Show a letter's titles. `focus` says where the cursor goes afterwards: the first title, or the letter itself. */
@@ -977,6 +1035,11 @@
     const rows = [];
     if (Plex.accountToken) rows.push({ key: 'st:server', label: 'Change server', sub: Plex.serverName || 'Choose which Plex server to use', onSelect: () => navigate({ screen: 'servers' }) });
     if (Backup.enabled) rows.push({ key: 'st:backup', label: 'Back up now', sub: 'Save your sign-in and settings to GitHub', onSelect: () => { Backup.flush(); } });
+    rows.push({
+      key: 'st:bright', label: 'Brightness',
+      sub: 'x',
+      onSelect: () => { cycleBrightness(); },
+    });
     rows.push({ key: 'st:reconnect', label: 'Reconnect', sub: 'Test the connection again', onSelect: () => { Plex.connected = false; resetCaches(); goHome(); } });
     const savedQ = () => Object.keys(KINDS).map((k) => { const m = loadQuality(k); return m ? KINDS[k] + ' ' + fmtLevel(LEVELS[m.lvl]) : null; }).filter(Boolean);
     rows.push({
@@ -1002,12 +1065,16 @@
     });
     const ul = h('ul', { class: 'list' });
     rows.forEach((r) => ul.append(h('li', {}, makeItem(r))));
+    const bsub = ul.querySelector('[data-key="st:bright"] .item-sub');
+    if (bsub) bsub.id = 'st-bright-sub';
     screenEl.replaceChildren(h('div', { class: 'info' },
       h('p', {}, who),
       h('p', {}, 'Server: ' + (Plex.serverName || host || 'not chosen yet') + (host && Plex.serverName ? ' (' + host + ')' : '')),
       h('p', {}, 'Connection: ' + how),
+      battery ? h('p', { id: 'st-battery' }, 'Battery: ' + Math.round(battery.level * 100) + '%' + (battery.charging ? ' (charging)' : '')) : null,
       h('p', { id: 'st-backup' }, Backup.enabled ? Backup.describe() : 'Backup: off. To switch it on, add ?sync=YOUR-KEY to this app\u2019s address (see the README).')), ul);
     screenEl.append(h('p', { class: 'note' }, APP_NAME + ' v' + VERSION + ' \u00B7 an unofficial app, not made by or connected to Plex or Meta. The app itself collects nothing; your sign-in stays on this device' + (Backup.enabled ? ', plus an encrypted backup in your own GitHub account.' : '.')));
+    setBrightness(brightness, false);          // fills in the Brightness row's text
     if (Plex.viaLink) screenEl.append(h('p', { class: 'note' }, 'Your launch link contains a token, so this app will sign in again on its next start. To stop that, edit the link in the Meta AI app and remove the #token part.'));
     screenEl.scrollTop = 0;
     focusInitial();
@@ -1023,6 +1090,7 @@
       'App v' + VERSION,
       (navigator.userAgent.match(/Chrome\/[\d.]+/) || ['browser ?'])[0],
       'Native HLS: ' + (v.canPlayType('application/vnd.apple.mpegurl') || 'no') + '  MSE: ' + (window.MediaSource ? 'yes' : 'no'),
+      'Battery info: ' + (battery ? Math.round(battery.level * 100) + '%' : (navigator.getBattery ? 'available, not read yet' : 'not offered by this browser')),
       'History entries: ' + history.length,
       'Server: ' + host,
     ];
@@ -1215,7 +1283,9 @@
     ctrl.hidden = false;
     topbar.hidden = false;
     updateProgress();
-    if (!ctrl.contains(document.activeElement) && document.activeElement !== backBtn) bPlay.focus();
+    hud.hidden = false;
+    paintBattery();
+    if (!ctrl.contains(document.activeElement) && document.activeElement !== backBtn && document.activeElement !== bBright) bPlay.focus();
     surface.hidden = true;
     armHide();
   }
@@ -1225,6 +1295,7 @@
     clearHide();
     ctrl.hidden = true;
     topbar.hidden = true;
+    hud.hidden = true;
     surface.hidden = false;
     calmHint();
     surface.focus({ preventScroll: true });
@@ -1232,6 +1303,7 @@
 
   function resetPlayerUi() {
     ctrl.hidden = true;
+    hud.hidden = true;
     perr.hidden = true;
     topbar.hidden = true;
     surface.hidden = false;
@@ -1651,6 +1723,8 @@
       if (result === 'restored') toast('Restored your sign-in and settings from GitHub');
     }
     creds = Plex.init();
+    const savedBrightness = Number(Plex.recall('brightness'));
+    setBrightness(BRIGHT_LEVELS.indexOf(savedBrightness) >= 0 ? savedBrightness : 100, false);
     const saved = history.state;
     let start = ROOT;
     if (saved && saved.screen) {
