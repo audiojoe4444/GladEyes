@@ -15,14 +15,14 @@
   'use strict';
 
   const APP_NAME = 'GladEyes';
-  const VERSION = '12';
+  const VERSION = '13';
   const cfg = window.PLEX_CONFIG || {};
   const pb = Object.assign({
     strategy: 'auto', hlsEngine: 'auto', container: 'mp4', maxVideoBitrate: 600,
     forceTranscode: true, seekStepSeconds: 15, controlsHideMs: 6000, startTimeoutSeconds: 45, hlsJsUrl: '',
     rebufferSeconds: 10, rebufferMaxSeconds: 25, autoLowerQuality: true,
     relayBitrate: 400,
-    rememberQuality: true, autoRaiseQuality: true, autoRaiseUpToKbps: 1200, raiseAfterSeconds: 150, raiseBufferSeconds: 4,
+    rememberQuality: true,
   }, cfg.playback || {});
   const STEP = pb.seekStepSeconds;
   const MAX_INDEX = 4;     // host keeps at most 5 history entries (indexes 0..4)
@@ -1140,48 +1140,52 @@
   // =====================================================================
   const P = {
     item: null, session: '', mode: '', ladder: [], idx: 0, errors: [],
-    lvl: 3, bad: -1, kind: 'local', fromMemory: false, raisedAt: 0, smoothSince: 0,
+    lvl: 3, kind: 'local', fromMemory: false,
     offset: 0, base: 0, baseSet: false, dur: 0, streamSeq: 0, pending: null, started: false,
     needAdvance: false, advFrom: 0, forceStart: false, guardUntil: 0, startFix: 0, stalls: 0, stallTimes: [], rebuf: false, rebufTimer: 0,
     guardT0: 0, hideTimer: 0, tick: 0, watchdog: 0, hls: null, decisionText: '',
   };
   const MODE_NAME = { 'hls-native': 'HLS', 'hls-js': 'HLS (hls.js)', mp4: 'MP4' };
-  // The quality steps, best first. The app moves along these by itself (down when playback keeps stalling, up when it has
-  // been smooth for a while) and remembers the step that worked for each kind of connection, so the next film starts
-  // in the right place. Only `maxVideoBitrate` / `relayBitrate` in config.js decide where a first-ever play starts.
+  // The quality steps, best first. A film starts at the default step (`maxVideoBitrate` / `relayBitrate` in config.js) and
+  // only ever moves DOWN, when playback keeps stalling. It never climbs back up by itself: restarting a stream at a higher
+  // quality mid-film kept failing on the glasses. The step that worked is remembered per kind of connection, but never
+  // better than the default, so the next film starts somewhere that is known to be steady.
   const LEVELS = [
     { r: '854x480', b: 2000 }, { r: '640x360', b: 1200 }, { r: '480x270', b: 800 }, { r: '480x270', b: 600 },
     { r: '448x252', b: 500 }, { r: '426x240', b: 400 }, { r: '384x216', b: 320 }, { r: '320x180', b: 250 },
   ];
   const levelFor = (kbps) => { const i = LEVELS.findIndex((l) => l.b <= kbps); return i < 0 ? LEVELS.length - 1 : i; };
   const fmtLevel = (l) => l.r.replace('x', '\u00D7') + ' @ ' + l.b / 1000 + ' Mbps';
-  const BAD_TTL = 20 * 60 * 1000;     // a step that stalled is avoided for this long, then tried again (connections change)
   const KINDS = { local: 'Home', remote: 'Remote', relay: 'Relay' };
 
+  /** The step a first-ever film starts at on this kind of connection. */
+  function defaultLevel(kind) {
+    let kbps = pb.maxVideoBitrate;
+    if (kind === 'relay' && pb.relayBitrate && pb.relayBitrate < kbps) kbps = pb.relayBitrate;   // Plex's relay is slow
+    return levelFor(kbps);
+  }
+  /** A remembered step for this kind of connection, or null. Never better than the default (older versions could save a higher one). */
   function loadQuality(kind) {
     try {
       const m = JSON.parse(Plex.recall('quality.' + kind) || 'null');
       if (!m || typeof m.l !== 'number' || m.l < 0 || m.l >= LEVELS.length) return null;
-      return { lvl: m.l, bad: (Date.now() - (m.t || 0) < BAD_TTL && typeof m.bad === 'number') ? m.bad : -1 };
+      const def = defaultLevel(kind);
+      return m.l > def ? { lvl: m.l } : null;
     } catch (e) { return null; }
   }
   function saveQuality() {
-    if (pb.rememberQuality) Plex.remember('quality.' + P.kind, JSON.stringify({ l: P.lvl, bad: P.bad, t: Date.now() }));
+    if (pb.rememberQuality) Plex.remember('quality.' + P.kind, JSON.stringify({ l: P.lvl, t: Date.now() }));
   }
-  /** Where this play starts: what worked last time on this kind of connection, otherwise the configured default. */
+  /** Where this play starts: a lighter step that worked last time on this kind of connection, otherwise the configured default. */
   function chooseStartLevel() {
     P.kind = Plex.connType || 'local';
-    let kbps = pb.maxVideoBitrate;
-    if (P.kind === 'relay' && pb.relayBitrate && pb.relayBitrate < kbps) kbps = pb.relayBitrate;   // Plex's relay is slow
-    P.lvl = levelFor(kbps);
-    P.bad = -1;
+    P.lvl = defaultLevel(P.kind);
     P.fromMemory = false;
     if (pb.rememberQuality) {
       const m = loadQuality(P.kind);
-      if (m) { P.lvl = m.lvl; P.bad = m.bad; P.fromMemory = true; }
+      if (m) { P.lvl = m.lvl; P.fromMemory = true; }
     }
-    P.raisedAt = 0;
-    P.smoothSince = 0;
+    P.stallTimes = [];
     Log.add('quality ' + P.kind + ' starts at ' + fmtLevel(LEVELS[P.lvl]) + (P.fromMemory ? ' (saved)' : ''));
   }
   // A 1x1 transparent picture: stops the browser drawing its own grey "play" placeholder over the black screen.
@@ -1509,10 +1513,7 @@
     P.stalls += 1;
     Log.add('stall ' + P.stalls + ' buf ' + Math.round(bufferedAhead()) + 's');
     P.stallTimes = P.stallTimes.filter((t) => now - t < 90000).concat(now);
-    P.smoothSince = now;
-    // A stall soon after we raised the quality means that step is too much for this connection: go straight back.
-    const raiseFailed = P.raisedAt && now - P.raisedAt < 60000;
-    if (pb.autoLowerQuality && (raiseFailed || P.stallTimes.length >= 3) && P.lvl + 1 < LEVELS.length) { stepDown(); return; }
+    if (pb.autoLowerQuality && P.stallTimes.length >= 3 && P.lvl + 1 < LEVELS.length) { stepDown(); return; }
     if (P.dur > 0 && P.dur - position() < 20) return;            // nearly at the end: just let it finish
     // Browsers restart the instant a sliver of data arrives, which gives stop-start every few seconds.
     // With hls.js (where this app controls buffering) wait until several seconds are stored up, then resume.
@@ -1542,12 +1543,9 @@
 
   function stepDown() {
     const pos = position();
-    P.bad = Math.max(P.bad, P.lvl);       // this step (and anything better) stalled here
-    P.lvl += 1;
+    P.lvl += 1;                           // this step stalled here, so use the next lighter one
     P.fromMemory = false;
     P.stallTimes = [];
-    P.raisedAt = 0;
-    P.smoothSince = 0;
     saveQuality();
     Log.add('quality down to ' + fmtLevel(LEVELS[P.lvl]));
     const old = P.session;
@@ -1556,34 +1554,11 @@
     begin(pos, 'Lowering quality to keep it smooth\u2026');
   }
 
-  /** After a good stretch without stalls, try one step up. (Never while the controls are open, or near the end.) */
-  function maybeRaise() {
-    if (!pb.autoRaiseQuality || !P.item || !P.started || P.needAdvance || video.paused || P.rebuf || !ctrl.hidden) return;
-    const target = P.lvl - 1;
-    if (target < 0 || target <= P.bad || LEVELS[target].b > pb.autoRaiseUpToKbps) return;
-    if (!P.smoothSince || Date.now() - P.smoothSince < pb.raiseAfterSeconds * 1000) return;
-    if (bufferedAhead() < pb.raiseBufferSeconds) return;
-    if (P.dur > 0 && P.dur - position() < 120) return;
-    const pos = position();
-    P.lvl = target;
-    P.fromMemory = false;
-    P.raisedAt = Date.now();
-    P.smoothSince = Date.now();
-    P.stallTimes = [];
-    saveQuality();
-    Log.add('quality up to ' + fmtLevel(LEVELS[P.lvl]));
-    const old = P.session;
-    P.session = uuid();
-    Plex.stop(old);
-    begin(pos, 'Raising quality\u2026');
-  }
-
   function heartbeat() {
     if (!P.item) return;
     Plex.ping(P.session);
     Plex.timeline(P.item, video.paused && !P.rebuf ? 'paused' : 'playing', position() * 1000, P.dur * 1000, P.session);
     Log.add('hb ' + fmtTime(position()) + ' buf ' + Math.round(bufferedAhead()) + 's ' + (video.paused ? 'paused' : 'playing') + ' stalls ' + P.stalls);
-    maybeRaise();
   }
 
   /** Stop everything that belongs to the current playback. Cheap, and safe to call at any time. */
@@ -1678,7 +1653,6 @@
     if (P.needAdvance && !video.paused && Math.abs(video.currentTime - P.advFrom) > 0.25) {
       P.needAdvance = false;
       P.started = true;
-      P.smoothSince = Date.now();
       clearTimeout(P.watchdog);
       P.pending = null;
       setLoading(false);
