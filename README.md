@@ -1,4 +1,4 @@
-# GladEyes (v12)
+# GladEyes (v13)
 
 ![GladEyes logo](icons/logo-512.png)
 
@@ -84,15 +84,15 @@ Each time it opens, GladEyes works out the best way to reach your server, in thi
 
 The Libraries screen says how it connected.
 
-**Video quality looks after itself.** GladEyes keeps a ladder of quality steps, from 640x360 at 1.2 Mbps down to 320x180
-at 0.25 Mbps:
-- If playback keeps stalling (three times in 90 seconds) it moves **down** one step.
-- After about two and a half minutes of smooth playback it tries one step **up** (never above 1.2 Mbps). If that stalls
-  within a minute it goes straight back, and leaves that step alone for 20 minutes.
-- It **remembers** the step that worked separately for **home, remote and relay**, so the next film starts in the right
-  place instead of waiting for the downgrade. People with faster connections drift upwards; slower ones settle lower.
-- The stats line shows what it is using ("(saved)" means it started from a remembered step). **Settings > Reset saved
-  video quality** clears what it has learned.
+**Video quality is kept steady rather than sharp.** Every film starts at 480x270 (0.6 Mbps), which is steady on the
+glasses' small display, or lighter on Plex's relay:
+- If playback keeps stalling (three times in 90 seconds) it moves **down** one step, down to 320x180 at 0.25 Mbps at worst.
+- It never moves **up** by itself. (Earlier versions tried this after a smooth stretch, but restarting the stream at a
+  higher quality kept failing on the glasses, so it was removed in v13.)
+- If it had to step down, it **remembers** that for **home, remote and relay** separately, so the next film starts at the
+  lighter step instead of stalling first.
+- The stats line shows what it is using ("(saved)" means it started from a remembered lighter step). **Settings > Reset
+  saved video quality** clears that.
 
 ## If video won't play, or keeps buffering
 
@@ -160,18 +160,16 @@ Everything is plain HTML, CSS and JavaScript: no build step.
    `https://cdn.jsdelivr.net/npm/hls.js@1.5/dist/hls.min.js`, save it as `hls.min.js`, and upload it into the `js` folder.
    Without it the app falls back to that public address, and only when the glasses' own video player can't play the stream.
 4. `config.js` has the settings: `serverUrl` (optional starting address, leave `""` for a shared copy), `libraryOrder`,
-   the video quality settings (`maxVideoBitrate`, `relayBitrate`, raise and lower options), `strategy`, `hlsEngine` and more.
+   the video quality settings (`maxVideoBitrate`, `relayBitrate`, the step-down option), `strategy`, `hlsEngine` and more.
 
 | Setting | What it does |
 |---|---|
 | `movieMenu` | `true` (default): movie libraries open the Continue Watching / Recently Added / Library / Collections menu. `false`: straight to the A-Z list |
 | `libraryOrder` | Library names to list first. Every other movie/TV library follows in the server's order. `[]` = server order |
-| `playback.maxVideoBitrate` | Where the very first film starts (kbps; default 600, which is 480x270). After that the app adjusts and remembers |
-| `playback.relayBitrate` | Where a first-ever film starts when connected through Plex's relay (default 400) |
-| `playback.autoLowerQuality` / `autoRaiseQuality` | Step down after repeated stalls / step up after smooth playback (both default on) |
-| `playback.autoRaiseUpToKbps` | The highest step it will climb to by itself (default 1200) |
-| `playback.raiseAfterSeconds` / `raiseBufferSeconds` | How long playback must be smooth (150) and how many seconds stored up (4) before trying a step up |
-| `playback.rememberQuality` | Remember the working step for home / remote / relay (default on) |
+| `playback.maxVideoBitrate` | Where every film starts (kbps; default 600, which is 480x270). It only steps down from here |
+| `playback.relayBitrate` | Where films start when connected through Plex's relay (default 400) |
+| `playback.autoLowerQuality` | Step down after repeated stalls (default on) |
+| `playback.rememberQuality` | Remember a lighter step that was needed for home / remote / relay (default on) |
 | `playback.strategy` | `"auto"`, `"hls"` or `"mp4"`: which playback methods to try |
 | `playback.hlsEngine` | `"auto"` = the browser's own HLS player first, `"hlsjs"` = the hls.js library first |
 | `playback.rebufferSeconds` / `rebufferMaxSeconds` | With hls.js: how much to store up after a stall, and the longest to wait |
