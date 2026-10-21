@@ -15,14 +15,17 @@
   'use strict';
 
   const APP_NAME = 'GladEyes';
-  const VERSION = '13';
+  const VERSION = '14';
   const cfg = window.PLEX_CONFIG || {};
   const pb = Object.assign({
-    strategy: 'auto', hlsEngine: 'auto', container: 'mp4', maxVideoBitrate: 600,
-    forceTranscode: true, seekStepSeconds: 15, controlsHideMs: 6000, startTimeoutSeconds: 45, hlsJsUrl: '',
-    rebufferSeconds: 10, rebufferMaxSeconds: 25, autoLowerQuality: true,
-    relayBitrate: 400,
-    rememberQuality: true,
+    strategy: 'auto', hlsEngine: 'auto', container: 'mp4', forceTranscode: true,
+    // video quality: the sharpest the display can use at home, a light steady stream anywhere else
+    homeResolution: '854x480', homeBitrate: 2000, awayResolution: '480x270', awayBitrate: 700,
+    autoLowerQuality: true, rememberQuality: true,
+    seekStepSeconds: 15, controlsHideMs: 6000, hlsJsUrl: '',
+    startTimeoutSeconds: 45, awayStartTimeoutSeconds: 90,          // how long to wait for a picture before trying another way
+    prebufferSeconds: 0, awayPrebufferSeconds: 10, prebufferMaxSeconds: 20,   // head start of buffered video before playing
+    rebufferSeconds: 10, rebufferMaxSeconds: 25,
   }, cfg.playback || {});
   const STEP = pb.seekStepSeconds;
   const MAX_INDEX = 4;     // host keeps at most 5 history entries (indexes 0..4)
@@ -608,8 +611,11 @@
     if (skipped.length) {
       screenEl.append(h('p', { class: 'note' }, 'Not shown (this app plays movies and TV only): ' + skipped.map((l) => l.title).join(', ')));
     }
-    const where = { local: 'your home network', remote: 'a remote connection', relay: 'Plex relay (slow, so video quality is lowered)' }[Plex.connType];
-    if (where) screenEl.append(h('p', { class: 'note' }, 'Connected via ' + where + (Plex.serverName ? ' \u00B7 ' + Plex.serverName : '')));
+    const where = { local: 'your home network', remote: 'a remote connection', relay: 'Plex relay' }[Plex.connType];
+    if (where) {
+      const q = qualityFor(Plex.connType).q;
+      screenEl.append(h('p', { class: 'note' }, 'Connected via ' + where + (Plex.serverName ? ' \u00B7 ' + Plex.serverName : '') + ' \u00B7 video ' + q.r.replace('x', '\u00D7')));
+    }
     if (Backup.enabled) screenEl.append(h('p', { class: 'note', id: 'backup-note' }, Backup.describe()));
     screenEl.append(h('p', { class: 'note note-ver' }, APP_NAME + ' v' + VERSION),
       h('button', { class: 'btn btn-quiet', type: 'button', 'data-key': 'settings', onclick: () => navigate({ screen: 'settings' }) }, 'Settings'));
@@ -1029,7 +1035,7 @@
   function showSettings() {
     setTitle('Settings');
     const who = Plex.authMode === 'pin' ? 'Signed in' + (Plex.userName ? ' as ' + Plex.userName : '') : 'Signed in with a token';
-    const how = { local: 'your home network', remote: 'a remote connection', relay: 'Plex relay (slow, so video quality is lowered)' }[Plex.connType] || 'not connected';
+    const how = { local: 'your home network', remote: 'a remote connection', relay: 'Plex relay' }[Plex.connType] || 'not connected';
     let host = '';
     try { host = new URL(Plex.server).host; } catch (e) { /* ignore */ }
     const rows = [];
@@ -1041,14 +1047,18 @@
       onSelect: () => { cycleBrightness(); },
     });
     rows.push({ key: 'st:reconnect', label: 'Reconnect', sub: 'Test the connection again', onSelect: () => { Plex.connected = false; resetCaches(); goHome(); } });
-    const savedQ = () => Object.keys(KINDS).map((k) => { const m = loadQuality(k); return m ? KINDS[k] + ' ' + fmtLevel(LEVELS[m.lvl]) : null; }).filter(Boolean);
+    const qSub = (kind) => {
+      const q = kind === 'home' ? homeQuality() : awayQuality();
+      const lowered = kind === 'home' && pb.rememberQuality && loweredRecently() && awayQuality().b < q.b;
+      return fmtQ(q) + (lowered ? ' \u00B7 lowered for now (select to change)' : ' \u00B7 select to change');
+    };
     rows.push({
-      key: 'st:quality', label: 'Reset saved video quality',
-      sub: savedQ().length ? 'Saved: ' + savedQ().join(' \u00B7 ') : 'Nothing saved yet. It adjusts itself as you watch.',
-      onSelect: (ev) => {
-        Object.keys(KINDS).forEach((k) => Plex.forget('quality.' + k));
-        $('.item-sub', ev.currentTarget).textContent = 'Cleared. The next film starts at the default quality.';
-      },
+      key: 'st:qhome', label: 'Video quality at home', sub: qSub('home'),
+      onSelect: (ev) => { cycleQuality('home'); $('.item-sub', ev.currentTarget).textContent = qSub('home'); },
+    });
+    rows.push({
+      key: 'st:qaway', label: 'Video quality away from home', sub: qSub('away'),
+      onSelect: (ev) => { cycleQuality('away'); $('.item-sub', ev.currentTarget).textContent = qSub('away'); },
     });
     rows.push({ key: 'st:diag', label: 'Diagnostics', sub: 'What the app has been doing', onSelect: () => navigate({ screen: 'diag' }) });
     let armed = false;
@@ -1092,7 +1102,8 @@
       'Native HLS: ' + (v.canPlayType('application/vnd.apple.mpegurl') || 'no') + '  MSE: ' + (window.MediaSource ? 'yes' : 'no'),
       'Battery info: ' + (battery ? Math.round(battery.level * 100) + '%' : (navigator.getBattery ? 'available, not read yet' : 'not offered by this browser')),
       'History entries: ' + history.length,
-      'Server: ' + host,
+      'Server: ' + host + ' (' + (Plex.connType || 'not connected') + ')',
+      'Video: home ' + fmtQ(homeQuality()) + ' | away ' + fmtQ(awayQuality()),
     ];
     const block = (title, lines) => h('div', { class: 'diag-block' }, h('h3', { class: 'diag-h' }, title),
       h('pre', { class: 'diag-pre' }, lines.length ? lines.join('\n') : '(nothing recorded)'));
@@ -1140,62 +1151,60 @@
   // =====================================================================
   const P = {
     item: null, session: '', mode: '', ladder: [], idx: 0, errors: [],
-    lvl: 3, kind: 'local', fromMemory: false,
+    q: { r: '480x270', b: 700 }, kind: 'local', away: false, lowered: false,
+    stale: [], retries: 0, retryTimer: 0, wantPos: 0,
     offset: 0, base: 0, baseSet: false, dur: 0, streamSeq: 0, pending: null, started: false,
     needAdvance: false, advFrom: 0, forceStart: false, guardUntil: 0, startFix: 0, stalls: 0, stallTimes: [], rebuf: false, rebufTimer: 0,
     guardT0: 0, hideTimer: 0, tick: 0, watchdog: 0, hls: null, decisionText: '',
   };
   const MODE_NAME = { 'hls-native': 'HLS', 'hls-js': 'HLS (hls.js)', mp4: 'MP4' };
-  // The quality steps, best first. A film starts at the default step (`maxVideoBitrate` / `relayBitrate` in config.js) and
-  // only ever moves DOWN, when playback keeps stalling. It never climbs back up by itself: restarting a stream at a higher
-  // quality mid-film kept failing on the glasses. The step that worked is remembered per kind of connection, but never
-  // better than the default, so the next film starts somewhere that is known to be steady.
-  const LEVELS = [
-    { r: '854x480', b: 2000 }, { r: '640x360', b: 1200 }, { r: '480x270', b: 800 }, { r: '480x270', b: 600 },
-    { r: '448x252', b: 500 }, { r: '426x240', b: 400 }, { r: '384x216', b: 320 }, { r: '320x180', b: 250 },
-  ];
-  const levelFor = (kbps) => { const i = LEVELS.findIndex((l) => l.b <= kbps); return i < 0 ? LEVELS.length - 1 : i; };
-  const fmtLevel = (l) => l.r.replace('x', '\u00D7') + ' @ ' + l.b / 1000 + ' Mbps';
-  const KINDS = { local: 'Home', remote: 'Remote', relay: 'Relay' };
 
-  /** The step a first-ever film starts at on this kind of connection. */
-  function defaultLevel(kind) {
-    let kbps = pb.maxVideoBitrate;
-    if (kind === 'relay' && pb.relayBitrate && pb.relayBitrate < kbps) kbps = pb.relayBitrate;   // Plex's relay is slow
-    return levelFor(kbps);
+  // ---------- video quality ----------
+  // Two profiles, picked by how the glasses reached the server:
+  //   AT HOME (your home network): the sharpest picture the display can use. If it keeps stalling, it steps down ONCE,
+  //                                to the away profile, and remembers that for a while.
+  //   AWAY (remote connection or Plex relay): a light, steady stream. It never changes in the middle of a film, because
+  //                                restarting a stream over a remote connection is what used to make playback die.
+  // Settings lets you pick another option for each (the lists below; the first one is the default from config.js).
+  const uniqueQ = (list) => list.filter((q, i) => list.findIndex((o) => o.r === q.r && o.b === q.b) === i);
+  const HOME_CHOICES = uniqueQ([{ r: pb.homeResolution, b: pb.homeBitrate }, { r: '1280x720', b: 4000 }, { r: pb.awayResolution, b: pb.awayBitrate }]);
+  const AWAY_CHOICES = uniqueQ([{ r: pb.awayResolution, b: pb.awayBitrate }, { r: '426x240', b: 500 }, { r: '384x216', b: 350 }]);
+  const fmtQ = (q) => q.r.replace('x', '\u00D7') + ' \u00B7 ' + q.b / 1000 + ' Mbps';
+  const choice = (list, key) => { const i = Number(Plex.recall(key)); return list[i >= 0 && i < list.length ? Math.floor(i) : 0]; };
+  const homeQuality = () => choice(HOME_CHOICES, 'q.home');
+  const awayQuality = () => choice(AWAY_CHOICES, 'q.away');
+  const LOWERED_TTL = 12 * 3600 * 1000;      // after a step down at home, start the next films lighter for this long
+  const loweredRecently = () => { const t = Number(Plex.recall('lowered')); return t > 0 && Date.now() - t < LOWERED_TTL; };
+  function cycleQuality(kind) {
+    const list = kind === 'home' ? HOME_CHOICES : AWAY_CHOICES;
+    const key = 'q.' + kind;
+    const cur = list.indexOf(choice(list, key));
+    Plex.remember(key, (cur + 1) % list.length);
+    if (kind === 'home') Plex.forget('lowered');        // choosing by hand overrides the automatic step down
+    Log.add('quality ' + kind + ' set to ' + fmtQ(choice(list, key)));
   }
-  /** A remembered step for this kind of connection, or null. Never better than the default (older versions could save a higher one). */
-  function loadQuality(kind) {
-    try {
-      const m = JSON.parse(Plex.recall('quality.' + kind) || 'null');
-      if (!m || typeof m.l !== 'number' || m.l < 0 || m.l >= LEVELS.length) return null;
-      const def = defaultLevel(kind);
-      return m.l > def ? { lvl: m.l } : null;
-    } catch (e) { return null; }
+  /** The quality a film starts at for this kind of connection (local | remote | relay). */
+  function qualityFor(kind) {
+    if (kind !== 'local') return { q: awayQuality(), away: true, lowered: false };
+    const q = homeQuality();
+    if (pb.rememberQuality && loweredRecently() && awayQuality().b < q.b) return { q: awayQuality(), away: false, lowered: true };
+    return { q, away: false, lowered: false };
   }
-  function saveQuality() {
-    if (pb.rememberQuality) Plex.remember('quality.' + P.kind, JSON.stringify({ l: P.lvl, t: Date.now() }));
-  }
-  /** Where this play starts: a lighter step that worked last time on this kind of connection, otherwise the configured default. */
-  function chooseStartLevel() {
+  /** Picks the quality for this film from how we're connected. */
+  function chooseQuality() {
     P.kind = Plex.connType || 'local';
-    P.lvl = defaultLevel(P.kind);
-    P.fromMemory = false;
-    if (pb.rememberQuality) {
-      const m = loadQuality(P.kind);
-      if (m) { P.lvl = m.lvl; P.fromMemory = true; }
-    }
+    const pick = qualityFor(P.kind);
+    P.q = pick.q;
+    P.away = pick.away;
+    P.lowered = pick.lowered;
     P.stallTimes = [];
-    Log.add('quality ' + P.kind + ' starts at ' + fmtLevel(LEVELS[P.lvl]) + (P.fromMemory ? ' (saved)' : ''));
+    Log.add('quality ' + P.kind + ' ' + P.q.r + ' @' + P.q.b + (P.lowered ? ' (lowered earlier)' : ''));
   }
   // A 1x1 transparent picture: stops the browser drawing its own grey "play" placeholder over the black screen.
   const BLANK = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
 
   const uuid = () => (window.crypto && crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2));
-  const pbFor = (protocol) => {
-    const q = LEVELS[P.lvl] || LEVELS[3];
-    return Object.assign({}, pb, { protocol, videoResolution: q.r, maxVideoBitrate: q.b });
-  };
+  const pbFor = (protocol) => Object.assign({}, pb, { protocol, videoResolution: P.q.r, maxVideoBitrate: P.q.b });
 
   function fullTitle(it) {
     if (it.type === 'episode') {
@@ -1261,7 +1270,7 @@
     ptime.textContent = fmtTime(pos) + (P.dur > 0 ? ' / ' + fmtTime(P.dur) : '');
     pstat.textContent = [
       MODE_NAME[P.mode],
-      fmtLevel(LEVELS[P.lvl]) + (P.fromMemory ? ' (saved)' : ''),
+      (P.away ? 'Away ' : 'Home ') + fmtQ(P.q) + (P.lowered ? ' (lowered)' : ''),
       'buffer ' + Math.round(bufferedAhead()) + 's',
       'stalls ' + P.stalls,
       P.startFix ? 'start fixed (was ' + P.startFix + 's)' : '',
@@ -1332,7 +1341,11 @@
     P.errors = [];
     P.ladder = buildLadder();
     P.idx = 0;
-    chooseStartLevel();
+    stopStale();
+    P.stale = [];
+    P.retries = 0;
+    clearTimeout(P.retryTimer);
+    chooseQuality();
     P.stalls = 0;
     P.stallTimes = [];
     P.rebuf = false;
@@ -1348,25 +1361,21 @@
     clearInterval(P.tick);
     P.tick = setInterval(heartbeat, 10000);
 
-    // Diagnostics only: doesn't hold up playback.
-    const session = P.session;
-    Plex.decision(item, { offset: 0, session, pb: pbFor(P.ladder[0] === 'mp4' ? 'http' : 'hls') }).then((d) => {
-      if (P.session === session && d && d.text) P.decisionText = d.text;
-    });
-
     begin(state.resume > 1 ? state.resume : 0);
   }
 
   function armWatchdog(my) {
     clearTimeout(P.watchdog);
+    const secs = P.away ? pb.awayStartTimeoutSeconds : pb.startTimeoutSeconds;      // away, the server and the link are slower to get going
     P.watchdog = setTimeout(() => {
-      if (my === P.streamSeq && !P.started) failMode('no video after ' + pb.startTimeoutSeconds + 's');
-    }, pb.startTimeoutSeconds * 1000);
+      if (my === P.streamSeq && !P.started) failMode('no video after ' + secs + 's', false);
+    }, secs * 1000);
   }
 
   function teardownEngine() {
     clearTimeout(P.watchdog);
     clearTimeout(P.rebufTimer);
+    clearTimeout(P.retryTimer);
     P.rebuf = false;
     if (P.hls) { try { P.hls.destroy(); } catch (e) { /* ignore */ } P.hls = null; }
   }
@@ -1380,16 +1389,48 @@
     }
   }
 
+  /**
+   * Begin playing. Away from home the link is thin, so first collect a few seconds of video (a head start), then play.
+   * Never waits for longer than prebufferMaxSeconds, and stops waiting early if the browser isn't loading anything while paused.
+   */
+  function startPlayback(my) {
+    const want = P.away ? pb.awayPrebufferSeconds : pb.prebufferSeconds;
+    if (!(want > 0)) { playSafe(); return; }
+    const t0 = Date.now();
+    let best = 0;
+    let grewAt = t0;
+    let metaAt = 0;
+    setLoading(true, 'Getting a head start\u2026');
+    const tick = () => {
+      if (my !== P.streamSeq || !P.item || P.started) return;
+      const now = Date.now();
+      const ahead = bufferedAhead();
+      if (video.readyState >= 1 && !metaAt) metaAt = now;
+      if (ahead > best + 0.3) { best = ahead; grewAt = now; }
+      const quiet = metaAt ? now - Math.max(grewAt, metaAt) : 0;
+      // a browser that won't fetch anything until it is told to play (preload "none"): don't wait for it
+      const notLoading = P.mode !== 'hls-js' && video.readyState === 0 && video.networkState !== 2 && now - t0 > 2500;
+      if (ahead >= want || now - t0 > pb.prebufferMaxSeconds * 1000 || quiet > 5000 || notLoading) {
+        Log.add('head start ' + Math.round(ahead) + 's after ' + Math.round((now - t0) / 1000) + 's');
+        playSafe();
+        return;
+      }
+      setTimeout(tick, 250);
+    };
+    tick();
+  }
+
   /** Start (or restart) playback with the current rung of the ladder, from `pos` seconds. */
   function begin(pos, message) {
     const my = ++P.streamSeq;
     teardownEngine();
+    P.wantPos = pos;
     const mode = P.ladder[P.idx];
     P.mode = mode;
     P.started = false;
     P.needAdvance = false;
     if (pos > 1) { P.guardUntil = 0; P.forceStart = false; }   // resuming mid-movie (after a fallback or quality change), not a fresh start
-    Log.add('start ' + mode + ' ' + LEVELS[P.lvl].r + ' @' + LEVELS[P.lvl].b + (pos > 1 ? ' from ' + fmtTime(pos) : ''));
+    Log.add('start ' + mode + ' ' + P.q.r + ' @' + P.q.b + (pos > 1 ? ' from ' + fmtTime(pos) : ''));
     setLoading(true, message || (P.idx > 0 ? 'Trying another way (' + MODE_NAME[mode] + ')\u2026' : 'Starting the transcoder\u2026'));
     armWatchdog(my);
 
@@ -1399,7 +1440,7 @@
       P.baseSet = false;
       video.src = Plex.streamUrl(P.item, { offset: P.offset, session: P.session, pb: pbFor('http') });
       video.load();
-      playSafe();
+      startPlayback(my);
       return;
     }
 
@@ -1411,43 +1452,67 @@
       video.load();
       // Be explicit about where to begin: some players start a growing HLS playlist near its newest end.
       video.addEventListener('loadedmetadata', () => { try { video.currentTime = pos > 1 ? pos : 0; } catch (e) { /* ignore */ } }, { once: true });
-      playSafe();
+      startPlayback(my);
       return;
     }
 
     // hls-js
     loadHlsJs().then(() => {
       if (my !== P.streamSeq) return;
-      if (!window.Hls || !window.Hls.isSupported()) { failMode('not supported here'); return; }
+      if (!window.Hls || !window.Hls.isSupported()) { failMode('not supported here', false); return; }
       const hls = new window.Hls({
         enableWorker: true, lowLatencyMode: false, startFragPrefetch: true,
         maxBufferLength: 60, maxMaxBufferLength: 120, maxBufferSize: 80 * 1000 * 1000, backBufferLength: 20,
         startPosition: pos > 1 ? pos : 0,     // 0 = the beginning (the default -1 would start a live-style playlist at its newest end)
+        // Be patient: a transcoder that is just starting, or a thin remote link, can take a while to answer.
+        manifestLoadingTimeOut: 30000, manifestLoadingMaxRetry: 3, manifestLoadingRetryDelay: 1500,
+        levelLoadingTimeOut: 30000, levelLoadingMaxRetry: 4, levelLoadingRetryDelay: 1500,
+        fragLoadingTimeOut: P.away ? 60000 : 30000, fragLoadingMaxRetry: 6, fragLoadingRetryDelay: 1000,
       });
       P.hls = hls;
       let mediaFixes = 0;
       let netFixes = 0;
-      hls.on(window.Hls.Events.MANIFEST_PARSED, () => playSafe());
+      hls.on(window.Hls.Events.MANIFEST_PARSED, () => startPlayback(my));
       hls.on(window.Hls.Events.ERROR, (_ev, d) => {
         if (my !== P.streamSeq || !d || !d.fatal) return;
         if (d.type === window.Hls.ErrorTypes.MEDIA_ERROR && mediaFixes++ < 2) { hls.recoverMediaError(); return; }
-        // A refused/unparseable playlist won't fix itself, so don't wait: move to the next method.
-        const hopeless = /^manifest/.test(d.details || '') || (d.response && d.response.code >= 400 && d.response.code < 500);
-        if (d.type === window.Hls.ErrorTypes.NETWORK_ERROR && !hopeless && netFixes++ < 1) { hls.startLoad(); return; }
-        failMode((d.details || d.type || 'error') + (d.response && d.response.code ? ' (HTTP ' + d.response.code + ')' : ''));
+        // A playlist that is refused or can't be understood won't fix itself; a timeout or dropped connection is worth another go.
+        const code = d.response && d.response.code;
+        const hopeless = /manifestParsingError|manifestIncompatibleCodecsError/.test(d.details || '') || (code >= 400 && code < 500);
+        if (d.type === window.Hls.ErrorTypes.NETWORK_ERROR && !hopeless && netFixes++ < (P.away ? 4 : 2)) {
+          Log.add('hls.js retry ' + netFixes + ': ' + (d.details || 'network'));
+          setTimeout(() => { if (my === P.streamSeq && P.hls === hls) hls.startLoad(); }, 1200);
+          return;
+        }
+        failMode((d.details || d.type || 'error') + (code ? ' (HTTP ' + code + ')' : ''), true);
       });
       hls.attachMedia(video);
       hls.loadSource(url);
-    }).catch(() => { if (my === P.streamSeq) failMode('the hls.js library couldn\u2019t be loaded'); });
+    }).catch(() => { if (my === P.streamSeq) failMode('the hls.js library couldn\u2019t be loaded', false); });
   }
 
-  /** The current rung didn't work: remember why, then try the next one from where we were. */
-  function failMode(reason) {
+  /**
+   * The current way didn't work. A busy server or a dropped connection often clears by itself, so (for real errors, not
+   * long waits) the same way gets one more go with a fresh session first. After that, on to the next way, from where we were.
+   */
+  function failMode(reason, canRetry) {
     if (!P.item) return;
-    const resumeAt = position();
+    const resumeAt = P.started ? position() : (P.wantPos || 0);     // a stream that never got going has no position of its own
     Log.add('fail ' + MODE_NAME[P.mode] + ': ' + reason);
     P.errors.push(MODE_NAME[P.mode] + ': ' + reason);
     teardownEngine();
+    if (canRetry && P.retries < 1) {
+      P.retries += 1;
+      const tok = ++P.streamSeq;
+      try { video.removeAttribute('src'); video.load(); } catch (e) { /* ignore */ }
+      P.stale.push(P.session);
+      stopStale();                       // clear the decks on the server: stop every earlier attempt, give it a moment, start afresh
+      P.session = uuid();
+      setLoading(true, 'Trying again\u2026');
+      P.retryTimer = setTimeout(() => { if (P.item && tok === P.streamSeq) begin(resumeAt, 'Trying again\u2026'); }, 3500);
+      return;
+    }
+    P.retries = 0;
     P.idx += 1;
     if (P.idx < P.ladder.length) { begin(resumeAt); return; }
     finalFailure();
@@ -1474,6 +1539,8 @@
     const mp4Url = Plex.streamUrl(item, { offset: 0, session, pb: pbFor('http') });
     const a = P.ladder.indexOf('mp4') === 0 ? null : await Plex.probe(hlsUrl);
     const b = pb.strategy === 'hls' ? null : await Plex.probe(mp4Url);
+    const plan = await Plex.decision(item, { offset: 0, session, pb: pbFor(P.ladder[0] === 'mp4' ? 'http' : 'hls') });
+    if (plan && plan.text) P.decisionText = plan.text;
     if (P.item !== item || P.session !== session) return;
     perrMsg.textContent = head + '\nServer replies \u2014 ' +
       (a ? 'HLS: ' + a : '') + (a && b ? ' | ' : '') + (b ? 'MP4: ' + b : '') +
@@ -1513,7 +1580,7 @@
     P.stalls += 1;
     Log.add('stall ' + P.stalls + ' buf ' + Math.round(bufferedAhead()) + 's');
     P.stallTimes = P.stallTimes.filter((t) => now - t < 90000).concat(now);
-    if (pb.autoLowerQuality && P.stallTimes.length >= 3 && P.lvl + 1 < LEVELS.length) { stepDown(); return; }
+    if (pb.autoLowerQuality && P.stallTimes.length >= 3 && stepDown()) return;
     if (P.dur > 0 && P.dur - position() < 20) return;            // nearly at the end: just let it finish
     // Browsers restart the instant a sliver of data arrives, which gives stop-start every few seconds.
     // With hls.js (where this app controls buffering) wait until several seconds are stored up, then resume.
@@ -1541,17 +1608,31 @@
     P.rebufTimer = setTimeout(check, 400);
   }
 
+  /** At home only, and only once per film: drop to the away profile. (Away from home nothing ever restarts mid-film.) */
   function stepDown() {
+    const light = awayQuality();
+    if (P.away || P.q.b <= light.b) return false;
     const pos = position();
-    P.lvl += 1;                           // this step stalled here, so use the next lighter one
-    P.fromMemory = false;
+    P.q = light;
+    P.lowered = true;
     P.stallTimes = [];
-    saveQuality();
-    Log.add('quality down to ' + fmtLevel(LEVELS[P.lvl]));
-    const old = P.session;
-    P.session = uuid();                 // fresh transcode session at the lower quality
-    Plex.stop(old);
-    begin(pos, 'Lowering quality to keep it smooth\u2026');
+    if (pb.rememberQuality) Plex.remember('lowered', Date.now());
+    Log.add('quality lowered to ' + P.q.r + ' @' + P.q.b);
+    restartStream(pos, 'Lowering quality to keep it smooth\u2026');
+    return true;
+  }
+
+  /** New transcode session at the new quality. The old one is only stopped once the new one is playing (see stopStale). */
+  function restartStream(pos, message) {
+    P.stale.push(P.session);
+    P.session = uuid();
+    P.retries = 0;
+    begin(pos, message);
+  }
+  function stopStale() {
+    const list = P.stale;
+    P.stale = [];
+    list.forEach((sess) => { if (sess) Plex.stop(sess); });
   }
 
   function heartbeat() {
@@ -1583,6 +1664,7 @@
       Plex.timeline(item, 'stopped', pos * 1000, P.dur * 1000, session);
       Plex.stop(session);
     }
+    stopStale();
     // Letting go of the media can be slow (or even throw) on some players, so do it once the new screen is showing.
     let done = false;
     const go = () => { if (!done) { done = true; releaseMedia(); } };
@@ -1612,7 +1694,7 @@
   video.addEventListener('error', () => {
     if (!P.item || !video.getAttribute('src') || P.mode === 'hls-js') return; // hls.js reports its own errors
     const code = video.error ? video.error.code : 0;
-    failMode(MEDIA_ERR[code] || 'error ' + code);
+    failMode(MEDIA_ERR[code] || 'error ' + code, true);
   });
 
   video.addEventListener('loadeddata', () => {
@@ -1653,6 +1735,8 @@
     if (P.needAdvance && !video.paused && Math.abs(video.currentTime - P.advFrom) > 0.25) {
       P.needAdvance = false;
       P.started = true;
+      P.retries = 0;
+      if (P.stale.length) stopStale();
       clearTimeout(P.watchdog);
       P.pending = null;
       setLoading(false);
@@ -1697,6 +1781,7 @@
       if (result === 'restored') toast('Restored your sign-in and settings from GitHub');
     }
     creds = Plex.init();
+    ['local', 'remote', 'relay'].forEach((k) => { if (Plex.recall('quality.' + k) !== null) Plex.forget('quality.' + k); });   // v9-v13 saved steps, no longer used
     const savedBrightness = Number(Plex.recall('brightness'));
     setBrightness(BRIGHT_LEVELS.indexOf(savedBrightness) >= 0 ? savedBrightness : 100, false);
     const saved = history.state;

@@ -151,7 +151,7 @@
       const chrome = (navigator.userAgent.match(/Chrome\/(\d+)/) || [])[1] || '120';
       return {
         'X-Plex-Product': 'GladEyes',
-        'X-Plex-Version': '13.0.0',
+        'X-Plex-Version': '14.0.0',
         'X-Plex-Client-Identifier': this.clientId,
         // "Chrome" makes the server apply its built-in Chrome client profile (H.264/AAC etc.).
         'X-Plex-Platform': 'Chrome',
@@ -172,10 +172,13 @@
 
     url(path, extra) { return this.buildUrl(this.server, path, Object.assign({}, this.identity(), extra || {})); },
 
+    /** How long one request may take: twice as long away from home, where the link and the server's answers are slower. */
+    reqMs() { return this.connType === 'remote' || this.connType === 'relay' ? this.timeoutMs * 2 : this.timeoutMs; },
+
     /** GET JSON with a hard time limit covering the whole download, so nothing can hang forever. */
     async json(path, extra, ms) {
       const ctl = new AbortController();
-      const timer = setTimeout(() => ctl.abort(), ms || this.timeoutMs);
+      const timer = setTimeout(() => ctl.abort(), ms || this.reqMs());
       try {
         let res;
         try {
@@ -489,7 +492,7 @@
 
       const once = async (start, count, attempt) => {
         try {
-          const mc = await page(start, count, attempt ? Math.ceil(this.timeoutMs / 2) : this.timeoutMs);
+          const mc = await page(start, count, attempt ? Math.ceil(this.reqMs() / 2) : this.reqMs());
           return (mc.Metadata || []).map(toRow);
         } catch (e) {
           if (e.kind === 'auth') throw e;
