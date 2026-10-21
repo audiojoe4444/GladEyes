@@ -1,4 +1,4 @@
-# GladEyes (v13)
+# GladEyes (v14)
 
 ![GladEyes logo](icons/logo-512.png)
 
@@ -72,33 +72,38 @@ Use the middle tap on the glasses for the web app menu (**Restart / Resume / Per
   of the picture is what you select. The line under the progress bar shows how it is playing (method, quality, buffer, stalls).
 
 **Settings** (bottom of the Libraries screen) shows who is signed in, which server and how you're connected, and has
-**Change server**, **Reconnect**, **Diagnostics** and **Sign out**.
+**Change server**, **Brightness**, **Reconnect**, the **video quality** choices for home and away, **Diagnostics** and **Sign out**.
 
 ## Watching away from home
 
 Each time it opens, GladEyes works out the best way to reach your server, in this order:
 1. **Your home network** (fast).
 2. **A remote connection**: your server's public address (needs Remote Access turned on).
-3. **Plex's relay**: slower, used when a direct remote connection isn't available. The app starts at a lighter quality
-   when connected this way.
+3. **Plex's relay**: Plex's own go-between, used when a direct remote connection isn't available.
 
-The Libraries screen says how it connected.
+The Libraries screen says how it connected, and which picture size it will use.
 
-**Video quality is kept steady rather than sharp.** Every film starts at 480x270 (0.6 Mbps), which is steady on the
-glasses' small display, or lighter on Plex's relay:
-- If playback keeps stalling (three times in 90 seconds) it moves **down** one step, down to 320x180 at 0.25 Mbps at worst.
-- It never moves **up** by itself. (Earlier versions tried this after a smooth stretch, but restarting the stream at a
-  higher quality kept failing on the glasses, so it was removed in v13.)
-- If it had to step down, it **remembers** that for **home, remote and relay** separately, so the next film starts at the
-  lighter step instead of stalling first.
-- The stats line shows what it is using ("(saved)" means it started from a remembered lighter step). **Settings > Reset
-  saved video quality** clears that.
+**Video quality depends on where you are.**
+- **At home** (your home network): **854x480 at 2 Mbps**, the sharpest picture the glasses' 600-pixel display can use. If
+  playback keeps stalling (three times in 90 seconds) it steps down **once**, to the away quality, and starts the next
+  films that way for the next 12 hours.
+- **Away** (a remote connection or Plex's relay): **480x270 at 0.7 Mbps**, light enough to hold up on mobile data. It
+  **never changes in the middle of a film**: restarting a stream over a remote connection is what used to make playback
+  stop, so away from home the stream is left alone. If the link is thin it simply pauses to buffer and carries on.
+- Away from home it also collects about 10 seconds of video before it starts, so a thin link has a cushion, and it is more
+  patient with a slow server or a poor signal (it waits up to 90 seconds for the first picture instead of 45).
+- If something goes wrong while starting or restarting, it tries the same way once more with a fresh stream before
+  moving on to another way.
+- **Settings > Video quality at home / away from home**: select a row to change it. At home: 854x480 (2 Mbps), 1280x720
+  (4 Mbps, if your server can transcode that fast) or 480x270 (0.7 Mbps). Away: 480x270 (0.7 Mbps), 426x240 (0.5 Mbps) or
+  384x216 (0.35 Mbps), for when you are somewhere with a weak signal. Choosing a home quality also clears the automatic step down.
+- The stats line shows what it is using ("Home" or "Away", and "(lowered)" after an automatic step down).
 
 ## If video won't play, or keeps buffering
 
 The player shows a report listing what was tried and what your server replied. Open **Settings > Diagnostics** straight
-after a problem to see a log of what the app was doing. Things to try: lower `maxVideoBitrate` in
-`config.js` (for example `400`), check the movie plays in Plex Web, and check your server isn't struggling to convert
+after a problem to see a log of what the app was doing. Things to try: lower the away quality (Settings > Video quality
+away from home, or `awayBitrate` in `config.js`, for example `500`), check the movie plays in Plex Web, and check your server isn't struggling to convert
 video (Plex Web > Settings > Status > Dashboard shows the transcode speed while playing).
 
 ## Backing up your sign-in (optional)
@@ -118,7 +123,7 @@ If you use other glasses apps that have the same backup feature, you can use the
 saves to its own separate gist.
 
 **What it does**
-- Saves your Plex sign-in, your chosen server and addresses, and your preferences (remembered video quality, last letter
+- Saves your Plex sign-in, your chosen server and addresses, and your preferences (video quality choices, last letter
   per library). Library lists and logs are not saved. Changes are saved within a few seconds (small, frequent ones at
   most once a minute), and again when you leave the app.
 - Everything is **encrypted on the glasses** before it is sent (AES-256, with a key made from your GitHub key). The gist
@@ -160,16 +165,18 @@ Everything is plain HTML, CSS and JavaScript: no build step.
    `https://cdn.jsdelivr.net/npm/hls.js@1.5/dist/hls.min.js`, save it as `hls.min.js`, and upload it into the `js` folder.
    Without it the app falls back to that public address, and only when the glasses' own video player can't play the stream.
 4. `config.js` has the settings: `serverUrl` (optional starting address, leave `""` for a shared copy), `libraryOrder`,
-   the video quality settings (`maxVideoBitrate`, `relayBitrate`, the step-down option), `strategy`, `hlsEngine` and more.
+   the video quality settings (`homeBitrate`, `awayBitrate` and friends), `strategy`, `hlsEngine` and more.
 
 | Setting | What it does |
 |---|---|
 | `movieMenu` | `true` (default): movie libraries open the Continue Watching / Recently Added / Library / Collections menu. `false`: straight to the A-Z list |
 | `libraryOrder` | Library names to list first. Every other movie/TV library follows in the server's order. `[]` = server order |
-| `playback.maxVideoBitrate` | Where every film starts (kbps; default 600, which is 480x270). It only steps down from here |
-| `playback.relayBitrate` | Where films start when connected through Plex's relay (default 400) |
-| `playback.autoLowerQuality` | Step down after repeated stalls (default on) |
-| `playback.rememberQuality` | Remember a lighter step that was needed for home / remote / relay (default on) |
+| `playback.homeResolution` / `homeBitrate` | Quality on your home network (default `"854x480"` and 2000 kbps). For more: `"1280x720"` and 4000 |
+| `playback.awayResolution` / `awayBitrate` | Quality away from home, remote or relay (default `"480x270"` and 700 kbps) |
+| `playback.autoLowerQuality` | At home only: after repeated stalls, drop once to the away quality (default on) |
+| `playback.rememberQuality` | ...and start the next films that way for 12 hours (default on) |
+| `playback.prebufferSeconds` / `awayPrebufferSeconds` | Seconds of video to collect before playing: at home (default 0) and away (default 10) |
+| `playback.startTimeoutSeconds` / `awayStartTimeoutSeconds` | How long to wait for the first picture before trying another way: at home (45) and away (90) |
 | `playback.strategy` | `"auto"`, `"hls"` or `"mp4"`: which playback methods to try |
 | `playback.hlsEngine` | `"auto"` = the browser's own HLS player first, `"hlsjs"` = the hls.js library first |
 | `playback.rebufferSeconds` / `rebufferMaxSeconds` | With hls.js: how much to store up after a stall, and the longest to wait |

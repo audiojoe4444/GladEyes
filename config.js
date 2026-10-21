@@ -33,14 +33,28 @@ window.PLEX_CONFIG = {
     strategy: "auto",
     hlsEngine: "auto",           // "auto" = the browser's own HLS player first. "hlsjs" = try the hls.js library first
     container: "mp4",            // container for the progressive MP4 fallback
-    maxVideoBitrate: 600,        // kbps every film starts at (600 = 480x270). Steady rather than sharp: it only ever steps down, never up
     forceTranscode: true,        // true = server always re-encodes to H.264 + AAC stereo (never direct-streams the video)
+
+    // VIDEO QUALITY. Which one is used depends on how the glasses reach your server:
+    //   at home (your home network)   -> the home settings: the sharpest picture the display can use
+    //   away (remote or Plex relay)   -> the away settings: light and steady, which is what holds up on mobile data
+    // Settings > "Video quality at home / away from home" lets you pick another option from the glasses.
+    homeResolution: "854x480",   // wider than the glasses' 600-pixel display, so this is as sharp as it can look.
+    homeBitrate: 2000,           // (For more: "1280x720" and 4000, if your server can transcode that fast.)
+    awayResolution: "480x270",
+    awayBitrate: 700,            // kbps
+    autoLowerQuality: true,      // at home only: if playback keeps stalling, drop once to the away quality
+    rememberQuality: true,       // ...and start the next films at that lighter quality for the next 12 hours
+
+    // Away from home, collect a few seconds of video before playing so a thin link has a cushion.
+    prebufferSeconds: 0,         // at home: play at once
+    awayPrebufferSeconds: 10,    // away: wait for this many seconds of video (never longer than prebufferMaxSeconds)
+    prebufferMaxSeconds: 20,
+
     seekStepSeconds: 15,
     controlsHideMs: 6000,        // playback controls auto-hide after this long while playing
     startTimeoutSeconds: 45,     // give up on one method (and try the next) if no picture by then
-    relayBitrate: 400,           // where films start when connected through Plex's relay (slow)
-    autoLowerQuality: true,      // if playback keeps stalling, step down to a lighter stream automatically
-    rememberQuality: true,       // remember a lighter step that was needed for home / remote / relay, so the next film starts there
+    awayStartTimeoutSeconds: 90, // ...but away from home the server and link are slower to get going
     rebufferSeconds: 10,         // after a stall, wait until this many seconds are stored up before resuming
     rebufferMaxSeconds: 25,      // ...but never wait longer than this
     hlsJsUrl: ""                 // optional: your own hls.js URL. Empty = js/vendor/hls.min.js, then a public CDN
